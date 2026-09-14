@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Document</title>
+</head>
+
+<body>
+    <h1>Aap ki apni dukan</h1>
+    <!DOCTYPE html>
+    <html lang="hi">
+
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>welding shop- मजबूत और भरोसेमंद वेल्डिंग वर्क्स</title>
+
+        <link rel="stylesheet" href="new.css">
+        <!-- FontAwesome Icons for Design -->
+        <link rel="stylesheet" href="https://cloudflare.com">
+    </head>
+
+    <body>
+
+        <!-- Header & Navigation -->
+        <header>
+            <div class="logo">Welding <span>Shop</span></div>
+            <nav>
+                <a href="index copy.html">know about us</a>
+                <a href="#home">होम</a>
+                <a href="#services">service</a>
+                <a href="#contact">संपर्क करें</a>
+                <a href="#about">हमारे बारे में</a>
+            </nav>
+            <div class="cart-icon" onclick="toggleCart()">
+                <i class="fas fa-shopping-cart"></i>
+                <span id="cart-count">10</span>
+            </div>
+        </header>
+
+        <!-- Hero Section -->
+        <section id="home" class="hero">
+            <figure>
+                <img src="belding.jpg" alt="Welding Work" class="hero-image" width="280" height="300">
+                <figcaption>हमारी विशेषज्ञता: मजबूत और भरोसेमंद वेल्डिंग</figcaption>
+            </figure>
+            <div class="hero-content">
+                <h1>मजबूत वेल्डिंग, पक्का समाधान!</h1>
+                <p>हम सिर्फ लोहा नहीं जोड़ते, हम आपका भरोसा जोड़ते हैं। आधुनिक डिज़ाइन्स और लाइफटाइम मजबूती।</p>
+                <a href="#services" class="btn">हमारी सेवाएं देखें</a>
+            </div>
+        </section>
+
+        <!-- Services Section -->
+        <section id="services" class="services">
+            <h2>हमारी खास <span>सेवाएं</span></h2>
+            <div class="services-grid">
+
+                <!-- Service 1 -->
+                <div class="service-card" data-id="1" data-name="आयरन गेट और ग्रिल" data-price="15000">
+                    <i class="fas fa-gate icon-design">🚧</i>
+                    <h3>आयरन गेट और ग्रिल</h3>
+                    <p>मजबूत और फैंसी डिज़ाइनों में होम गेट्स और खिड़की की ग्रिल।</p>
+                    <div class="price">₹15,000 से शुरू</div>
+                    <button class="add-to-cart-btn">कार्ट में जोड़ें</button>
+                </div>
+
+                <!-- Service 2 -->
+                <div class="service-card" data-id="2" data-name="स्टील रेलिंग (SS)" data-price="12000">
+                    <i class="fas fa-stairs icon-design">🪜</i>
+                    <h3>स्टील रेलिंग (SS)</h3>
+                    <p>सीढ़ियों और बालकनी के लिए कभी जंग न लगने वाली स्टील रेलिंग।</p>
+                    <div class="price">₹12,000 से शुरू</div>
+                    <button class="add-to-cart-btn">कार्ट में जोड़ें</button>
+                </div>
+
+                <!-- Service 3 -->
+                <div class="service-card" data-id="3" data-name="शटर और चैनल गेट" data-price="18000">
+                    <i class="fas fa-store icon-design">🏪</i>
+                    <h3>शटर और चैनल गेट</h3>
+                    <p>दुकानों और गोदामों के लिए हैवी-ड्यूटी रोलिंग शटर।</p>
+                    <div class="price">₹18,000 से शुरू</div>
+                    <button class="add-to-cart-btn">कार्ट में जोड़ें</button>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Shopping Cart Sidebar (Popup) -->
+        <div id="cart-sidebar" class="cart-sidebar">
+            <div class="cart-header">
+                <h3>आपकी चुनी हुई सेवाएं</h3>
+                <span class="close-cart" onclick="toggleCart()">&times;</span>
+            </div>
+            <div id="cart-items" class="cart-items">
+                <!-- कार्ट का सामान यहाँ दिखेगा -->
+                <p class="empty-msg">आपका कार्ट खाली है।</p>
+            </div>
+            <div class="cart-footer">
+                <h4>कुल अनुमानित राशि: ₹<span id="cart-total">0</span></h4>
+                <button class="checkout-btn" onclick="sendWhatsAppOrder()">व्हाट्सएप पर ऑर्डर बुक करें</button>
+            </div>
+        </div>
+        <section id="section5">
+            <h2>Quality Begins with Milan <br> Welding & Fabrication</h2>
+            <p>From reliable basic welding services to precision solutions that transform your vision into reality, you
+                can count on our team for expertise, innovation, and quality.</p>
+
+        </section>
+        <section id="section6">
+            <figure>
+                <img src="screen1.png" alt="Welding Video" width="400" height="300" controls>
+                <figcaption></figcaption>
+            
+                  <img src="screen2.png" alt="Welding Video" width="400" height="300" controls>
+                  <figcaption></figcaption>
+                    <img src="screen3.png" alt="Welding Video" width="400" height="300" controls>
+                    <figcaption></figcaption>             
+    
+            </figure>
+            
+
+
+        </section>
+
+        <!-- Floating WhatsApp Button
+    <a href="https://wa.me/917564887471" class="whatsapp-float" target="_blank">
+        <img src="https://wikimedia.org" alt="WhatsApp">
+    </a> -->
+        <button onclick="openWhatsApp()">WhatsApp karein</button>
+
+        <!-- JavaScript File Link -->
+        <script src="script.js"></script>
+    </body>
+
+    </html>
+
+
+
+
+    <script type="module" src="html.js"></script>
+</body>
+
+</html>
