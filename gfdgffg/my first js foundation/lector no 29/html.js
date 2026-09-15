@@ -80,7 +80,18 @@ console.log();
 // }
 // let object3 = {...object1, ...object2}
 // console.log(object3);
-const arr = [23, 24,56,37,578,577,]
-arr [4] = 300
-console.log(arr);
+// const arr = [23, 24,56,37,578,577,]
+// arr [4] = 300
+// console.log(arr);
+
+const whatsappButton = document.querySelector('#whatsapp-button');
+
+whatsappButton?.addEventListener('click', () => {
+    const phoneNumber = '917564887471';
+    const message = 'Hello, I want to know about your welding services.';
+    const whatsappUrl = `https://wa.me/${phoneNumber}?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank', 'noopener');
+
+    window.open(whatsappUrl, '_blank', 'noopener');
+});
 

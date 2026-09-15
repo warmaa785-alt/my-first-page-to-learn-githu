@@ -27,6 +27,7 @@ header {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 20px;
     padding: 20px 8%;
     background-color: #111;
     position: sticky;
@@ -41,16 +42,39 @@ header {
     letter-spacing: 1px;
 }
 
-nav a {
-    color: #fff;
-    text-decoration: none;
-    margin-left: 20px;
-    font-weight: 500;
-    transition: 0.3s;
+nav {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
 }
 
-nav a:hover {
-    color: #ffcc00;
+nav a,
+nav button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #0ae0e0;
+    color: #062634;
+    border: 0;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+    text-decoration: none;
+    white-space: nowrap;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.whatsapp-link {
+    background-color: #25d366;
+}
+
+nav a:hover,
+nav button:hover {
+    background-color: #38b594;
+    color: #111;
 }
 #mai{
     background-color: black;
@@ -293,36 +317,196 @@ nav a:hover {
   height: 300px;
 }
 
-.checkout-btn {
-    width: 100%;
-    padding: 12px;
-    background-color: #25D366; /* WhatsApp Green */
-    color: white;
-    font-size: 16px;
-    font-weight: bold;
-    border: none;
+#section10 {
+    background-color: #062634;
+    padding: 20px;
+    text-align: center;
+}
+
+#section10 button {
+    background-color: #0ae0e0;
+    color: #062634;
+    border: 0;
     border-radius: 5px;
-    margin-top: 10px;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: 700;
     cursor: pointer;
 }
 
-/* WhatsApp Floating Button */
-.whatsapp-float {
-    position: fixed;
-    bottom: 25px;
-    left: 25px;
-    width: 60px;
-    height: 60px;
-    background-color: #25d366;
-    border-radius: 50%;
+#section10 {
     display: flex;
     align-items: center;
-    justify-content: center;
-    box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
-    z-index: 1000;
 }
 
-.whatsapp-float img {
-    width: 35px;
-    height: 35px;
+#section10 h2 {
+    flex: 1;
+    font-size: large;
+    font-weight: 700;
+    font-style: normal;
+    margin: 0;
+    padding: 20px 30px 20px 0;
+    border-right: 2px solid #0ae0e0;
+}
+
+#section10 p {
+    flex: 1;
+    padding-left: 30px;
+    text-align: left;
+}
+.h1{
+    font-size: 50px;
+    margin-left: 40px;
+    font-weight: bold;
+
+}
+.h1p{
+    margin-left: 40px;
+    font-weight: 700;
+    max-width: 700px;
+    margin-top: 16px;
+    line-height: 1.2;
+}
+.service-list {
+    background: #d0d0e8;
+    color: #040508;
+}
+
+.service-row {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    border-bottom: 1px solid #e4e4e7;
+}
+
+.service-row h3,
+.service-row p {
+    margin: 0;
+    padding: 22px 14px;
+}
+
+.service-row h3 {
+    background: #ffffff;
+    font-size: 16px;
+    border-right: 1px solid #eeeeee;
+}
+
+.service-row p {
+    font-size: 16px;
+    line-height: 1.6;
+}
+
+.site-footer {
+    background-color: #111;
+    border-top: 2px solid #ffcc00;
+    color: #ffffff;
+    padding: 42px 8% 20px;
+}
+
+.footer-content {
+    display: grid;
+    grid-template-columns: 1.4fr 1fr auto;
+    align-items: center;
+    gap: 30px;
+}
+
+.footer-brand p {
+    max-width: 360px;
+    margin-top: 10px;
+    color: #b8b8b8;
+}
+
+.footer-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+}
+
+.footer-links a {
+    color: #ffffff;
+    text-decoration: none;
+}
+
+.footer-links a:hover {
+    color: #ffcc00;
+}
+
+.footer-whatsapp {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background-color: #25d366;
+    color: #062634;
+    border-radius: 5px;
+    padding: 12px 18px;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.footer-copy {
+    margin-top: 30px;
+    padding-top: 18px;
+    border-top: 1px solid #383838;
+    color: #a7a7a7;
+    font-size: 14px;
+    text-align: center;
+}
+
+@media (max-width: 700px) {
+    .service-row {
+        grid-template-columns: 1fr;
+    }
+
+    .service-row h3 {
+        border-right: 0;
+        border-bottom: 1px solid #eeeeee;
+    }
+
+    .site-footer {
+        padding: 32px 20px 18px;
+    }
+
+    .footer-content {
+        grid-template-columns: 1fr;
+        align-items: start;
+        gap: 24px;
+    }
+
+    .footer-whatsapp {
+        justify-self: start;
+    }
+}
+@media (max-width: 850px) {
+    header {
+        flex-direction: column;
+        padding: 16px;
+    }
+
+    nav a,
+    nav button {
+        padding: 10px 14px;
+        font-size: 14px;
+    }
+
+    .cart-icon {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+    }
+
+    #section10 {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    #section10 h2 {
+        padding: 0 0 20px;
+        border-right: 0;
+        border-bottom: 2px solid #0ae0e0;
+    }
+
+    #section10 p {
+        padding: 20px 0 0;
+        text-align: center;
+    }
+
 }
