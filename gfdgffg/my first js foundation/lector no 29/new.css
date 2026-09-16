@@ -375,6 +375,34 @@ nav button:hover {
     font-weight: bold;
 
 }
+
+  .chat-float {
+    position: fixed;
+    right: 20px;
+    bottom: 20px;
+    background: #25D366;
+    color: white;
+    border: none;
+    border-radius: 50px;
+    width: 60px;
+    height: 60px;
+    font-size: 28px;
+    cursor: pointer;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    z-index: 9999;
+  }
+   .chat-msg {
+    position: fixed;
+    right: 90px;
+    bottom: 25px;
+    background: #111;
+    color: white;
+    padding: 12px 16px;
+    border-radius: 12px;
+    display: none;
+    font-size: 14px;
+    z-index: 9998;
+  }
 .h1p{
     margin-left: 40px;
     font-weight: 700;
@@ -465,6 +493,10 @@ nav button:hover {
     font-size: 14px;
     text-align: center;
 }
+
+
+
+
 
 @media (max-width: 850px) {
     header {
