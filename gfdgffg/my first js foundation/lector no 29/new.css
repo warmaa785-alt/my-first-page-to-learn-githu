@@ -10,7 +10,22 @@
 body {
     background-color: #1a1a1a;
     color: #ffffff;
+    overflow-x: hidden;
 }
+
+html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+}
+
+img,
+video {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
 .logo {
     color:rgba(17, 211, 211, 0.941);
     background-color: #062634;
@@ -451,7 +466,107 @@ nav button:hover {
     text-align: center;
 }
 
-@media (max-width: 700px) {
+@media (max-width: 850px) {
+    header {
+        flex-direction: column;
+        align-items: flex-start;
+        padding: 16px 20px;
+    }
+
+    .logo {
+        font-size: 22px;
+    }
+
+    nav {
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    nav a,
+    nav button {
+        padding: 10px 12px;
+        font-size: 13px;
+    }
+
+    .cart-icon {
+        position: absolute;
+        top: 24px;
+        right: 24px;
+    }
+
+    .hero {
+        min-height: 60vh;
+        height: auto;
+        padding: 40px 20px;
+    }
+
+    .hero-content h1 {
+        font-size: clamp(2rem, 8vw, 3rem);
+    }
+
+    .hero-content p {
+        font-size: 1rem;
+    }
+
+    .services {
+        padding: 40px 20px;
+    }
+
+    .services h2,
+    #section5 h2 {
+        font-size: clamp(1.8rem, 7vw, 3rem);
+    }
+
+    #section5 {
+        padding: 40px 20px;
+    }
+
+    #section5 p {
+        font-size: 1rem;
+    }
+
+    #section6 figure {
+        flex-direction: column;
+        gap: 16px;
+        padding: 16px;
+    }
+
+    #section6 figure img {
+        width: 100%;
+        max-width: 420px;
+        height: auto;
+    }
+
+    #section10 {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 24px 20px;
+    }
+
+    #section10 h2 {
+        padding: 0 0 20px;
+        border-right: 0;
+        border-bottom: 2px solid #0ae0e0;
+        font-size: 1.7rem;
+    }
+
+    #section10 p {
+        padding: 20px 0 0;
+        text-align: center;
+    }
+
+    .h1 {
+        font-size: clamp(2rem, 8vw, 3rem);
+        margin-left: 20px;
+        margin-right: 20px;
+    }
+
+    .h1p {
+        margin-left: 20px;
+        margin-right: 20px;
+        max-width: none;
+    }
+
     .service-row {
         grid-template-columns: 1fr;
     }
@@ -474,39 +589,4 @@ nav button:hover {
     .footer-whatsapp {
         justify-self: start;
     }
-}
-@media (max-width: 850px) {
-    header {
-        flex-direction: column;
-        padding: 16px;
-    }
-
-    nav a,
-    nav button {
-        padding: 10px 14px;
-        font-size: 14px;
-    }
-
-    .cart-icon {
-        position: absolute;
-        top: 24px;
-        right: 24px;
-    }
-
-    #section10 {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    #section10 h2 {
-        padding: 0 0 20px;
-        border-right: 0;
-        border-bottom: 2px solid #0ae0e0;
-    }
-
-    #section10 p {
-        padding: 20px 0 0;
-        text-align: center;
-    }
-
 }
