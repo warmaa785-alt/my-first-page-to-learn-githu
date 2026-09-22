@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="hi">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sehat Bhabua Team Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header><strong>Sehat Bhabua Team</strong><span>Private admin dashboard</span></header>
+    <main>
+        <section class="card">
+            <h1>Patient support dashboard</h1>
+            <p>केवल authorized team के लिए। Patient information को public share न करें।</p>
+            <div class="grid">
+                <input id="admin-phone" placeholder="Admin mobile number">
+                <input id="admin-password" type="password" placeholder="Admin password">
+            </div>
+            <div class="actions"><button id="admin-login">Team login</button><button id="admin-refresh" class="secondary">Refresh</button><input id="admin-date" type="date"></div>
+            <p id="admin-message" class="message"></p>
+        </section>
+        <section class="card">
+            <h2>Token bookings और patient contact</h2>
+            <div id="admin-appointments"><p>Team login के बाद data दिखेगा।</p></div>
+        </section>
+    </main>
+    <script src="admin.js?v=2"></script>
+</body>
+</html>

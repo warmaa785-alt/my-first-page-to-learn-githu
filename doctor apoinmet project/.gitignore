@@ -1,0 +1,16 @@
+# Local secrets and environment settings
+.env
+.env.*
+!.env.example
+
+# Installed dependencies
+node_modules/
+
+# Local logs and runtime files
+*.log
+npm-debug.log*
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.vscode/

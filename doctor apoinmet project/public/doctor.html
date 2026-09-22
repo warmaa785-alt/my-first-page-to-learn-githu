@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="hi">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Doctor Dashboard · Sehat Bhabua</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header><strong>Sehat Bhabua Doctor Dashboard</strong><span>Private doctor area</span></header>
+    <main>
+        <section class="card">
+            <h1>Doctor login</h1>
+            <p>Apne clinic ke tokens manage karne ke liye login karein.</p>
+            <div class="grid">
+                <input id="doctor-phone" placeholder="Doctor mobile number" inputmode="tel">
+                <input id="doctor-password" type="password" placeholder="Password">
+            </div>
+            <div class="actions">
+                <button id="doctor-login">Login</button>
+                <button id="doctor-logout" class="secondary" hidden>Logout</button>
+            </div>
+            <p id="doctor-message" class="message"></p>
+        </section>
+        <section id="doctor-panel" class="card" hidden>
+            <div id="doctor-profile" class="doctor-profile"></div>
+            <div class="section-title">
+                <h2>Patient token list</h2>
+                <input id="doctor-date" type="date">
+            </div>
+            <p id="doctor-summary" class="process"></p>
+            <div class="actions"><button id="doctor-next">Call next token</button><button id="doctor-refresh" class="secondary">Refresh tokens</button></div>
+            <h3 class="list-heading">आज के patients और उनके appointments</h3>
+            <div id="doctor-tokens"><p>Login ke baad patient list dikhegi.</p></div>
+        </section>
+    </main>
+    <script src="doctor.js?v=2"></script>
+</body>
+</html>
