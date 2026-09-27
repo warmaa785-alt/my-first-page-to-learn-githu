@@ -85,7 +85,36 @@ async function loadDoctors() {
 }
 async function trackingCard(x) {
     if (!state.token || ["completed", "cancelled", "no_show"].includes(x.status)) return "";
-    try { const t = await api(`/api/tokens/${x._id}/tracking`); return `<div class="tracking"><strong>Live tracking</strong><p>Current running token: <b>#${t.currentRunningToken || "—"}</b> · ${t.patientsAhead} patient(s) ahead<br>Estimated wait: ${t.estimatedWaitMinutes} minutes</p><button class="secondary refresh-tracking" data-id="${x._id}">Refresh tracking</button></div>`; } catch { return "<p>Tracking temporarily unavailable.</p>"; }
+    try { const t = await api(`/api/tokens/${x._id}/tracking`); return `<div class="tracking"><strong>Live token स्थिति</strong><p><b>आपका नंबर:</b> #${t.token}<br><b>अभी चल रहा नंबर:</b> #${t.currentRunningToken || "—"} · <b>${t.patientsAhead}</b> patient(s) आगे<br><b>अनुमानित समय:</b> लगभग ${t.estimatedWaitMinutes} मिनट बाद · scheduled time ${t.appointmentTime || "clinic timing"}</p><button class="secondary refresh-tracking" data-id="${x._id}">अभी स्थिति देखें</button></div>`; } catch { return "<p>Tracking temporarily unavailable.</p>"; }
+}
+async function loadSupportQuestions() {
+    if (!state.token) { $("#support-answers").innerHTML = "<p>सवाल भेजने के लिए पहले login करें।</p>"; return; }
+    try {
+        const items = await api("/api/support/questions/my");
+        $("#support-answers").innerHTML = items.length ? items.map((x) => `<article class="appointment"><b>आपका सवाल:</b> ${x.question}<br><b>स्थिति:</b> ${x.status === "answered" ? "जवाब मिल गया" : "Team जवाब देगी"}${x.answer ? `<p><b>Team का जवाब:</b> ${x.answer}</p>` : ""}</article>`).join("") : "<p>अभी कोई सवाल नहीं भेजा गया है।</p>";
+    } catch (e) { $("#support-message").textContent = e.message; }
+}
+function speakAssistantAnswer(text) {
+    if (!("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const speech = new SpeechSynthesisUtterance(text);
+    speech.lang = "hi-IN";
+    speech.rate = 0.95;
+    window.speechSynthesis.speak(speech);
+}
+function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character])); }
+async function askAssistant() {
+    if (!state.token) { $("#auth-panel").hidden = false; $("#assistant-message").textContent = "AI assistant के लिए पहले login करें।"; return; }
+    const question = $("#assistant-question").value.trim();
+    if (!question) { $("#assistant-message").textContent = "पहले अपना सवाल लिखें या बोलकर पूछें।"; return; }
+    $("#assistant-message").textContent = "AI जवाब तैयार कर रहा है...";
+    try {
+        const data = await api("/api/assistant", { method: "POST", body: JSON.stringify({ question }) });
+        $("#assistant-answer").hidden = false;
+        $("#assistant-answer").innerHTML = `<b>AI सहायक:</b><p>${escapeHtml(data.answer)}</p><button class="secondary assistant-speak" type="button">🔊 जवाब सुनें</button>`;
+        $("#assistant-message").textContent = "";
+        speakAssistantAnswer(data.answer);
+    } catch (error) { $("#assistant-message").textContent = error.message; }
 }
 async function loadAppointments() {
     if (!state.token) { $("#appointments").innerHTML = "<p>Login के बाद आपके tokens दिखेंगे।</p>"; return; }
@@ -94,6 +123,7 @@ async function loadAppointments() {
         const html = [];
         for (const status of groups) { const rows = items.filter((x) => x.status === status); if (!rows.length) continue; html.push(`<h3>${status.replace("_", " ")}</h3>`); for (const x of rows) html.push(`<article class="appointment"><strong>${x.appointmentId || "Appointment"} · Token ${x.tokenId}</strong><p>${x.doctor.name} · ${x.doctor.clinic} · ${x.visitDate} · ${x.appointmentTime || ""}<br>Payment: ${x.paymentMethod || "demo_cash"} · ${x.paymentStatus || "demo_paid"}<br>Status: ${x.status}</p>${await trackingCard(x)}</article>`); }
         $("#appointments").innerHTML = html.join("") || "<p>अभी कोई appointment नहीं है।";
+        loadSupportQuestions();
     } catch (e) { $("#appointments").textContent = e.message; }
 }
 async function showDoctorDetails(id) {
@@ -111,6 +141,18 @@ $("#register").addEventListener("click", () => authenticate("register")); $("#lo
 $("#forgot-password").addEventListener("click", async () => { $("#forgot-panel").hidden = false; try { const d = await api("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ phone: $("#phone").value }) }); $("#forgot-message").textContent = `${d.message} ${d.demoOtp ? `Demo OTP: ${d.demoOtp}` : ""}`; } catch (e) { $("#forgot-message").textContent = e.message; } });
 $("#verify-otp").addEventListener("click", async () => { try { const d = await api("/api/auth/forgot-password/verify", { method: "POST", body: JSON.stringify({ phone: $("#phone").value, otp: $("#otp").value, newPassword: $("#new-password").value }) }); $("#forgot-message").textContent = d.message; } catch (e) { $("#forgot-message").textContent = e.message; } });
 $("#refresh").addEventListener("click", loadAppointments);
+$("#ask-support").addEventListener("click", async () => { if (!state.token) { $("#auth-panel").hidden = false; $("#support-message").textContent = "सवाल भेजने के लिए पहले login करें।"; return; } try { const d = await api("/api/support/questions", { method: "POST", body: JSON.stringify({ question: $("#support-question").value }) }); $("#support-question").value = ""; $("#support-message").textContent = d.message; loadSupportQuestions(); } catch (e) { $("#support-message").textContent = e.message; } });
+$("#assistant-ask").addEventListener("click", askAssistant);
+$("#assistant-answer").addEventListener("click", () => { const answer = $("#assistant-answer p")?.textContent; if (answer) speakAssistantAnswer(answer); });
+$("#assistant-mic").addEventListener("click", () => {
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) { $("#assistant-message").textContent = "इस browser में voice input उपलब्ध नहीं है। सवाल लिखकर पूछें।"; return; }
+    const recognition = new Recognition();
+    recognition.lang = "hi-IN";
+    recognition.onresult = (event) => { $("#assistant-question").value = event.results[0][0].transcript; askAssistant(); };
+    recognition.onerror = () => { $("#assistant-message").textContent = "आवाज़ समझ नहीं आई। फिर कोशिश करें या सवाल लिखें।"; };
+    recognition.start();
+});
 $("#search").addEventListener("input", () => {
     clearTimeout(suggestionTimer);
     suggestionTimer = setTimeout(loadSearchSuggestions, 180);

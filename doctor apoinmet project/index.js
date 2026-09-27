@@ -12,6 +12,8 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
 if (!MONGODB_URI || !JWT_SECRET) throw new Error("MONGODB_URI and JWT_SECRET are required in a .env file.");
 
 app.use(cors());
@@ -63,11 +65,39 @@ tokenSchema.index({ doctor: 1, visitDate: 1, tokenNumber: 1 }, { unique: true })
 tokenSchema.index({ doctor: 1, patient: 1, visitDate: 1 });
 const counterSchema = new mongoose.Schema({ doctor: { type: mongoose.Schema.Types.ObjectId, ref: "Doctor", required: true }, visitDate: { type: String, required: true }, nextToken: { type: Number, default: 1 } });
 counterSchema.index({ doctor: 1, visitDate: 1 }, { unique: true });
+const supportQuestionSchema = new mongoose.Schema({
+    patient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    question: { type: String, required: true, trim: true, maxlength: 500 },
+    answer: { type: String, trim: true, maxlength: 1000, default: "" },
+    status: { type: String, enum: ["open", "answered"], default: "open" }
+}, { timestamps: true });
 const User = mongoose.model("User", userSchema);
 const Doctor = mongoose.model("Doctor", doctorSchema);
 const Token = mongoose.model("Token", tokenSchema);
 const DailyCounter = mongoose.model("DailyCounter", counterSchema);
+const SupportQuestion = mongoose.model("SupportQuestion", supportQuestionSchema);
 const resetRequests = new Map();
+
+async function ensureAdminAccount() {
+    const phone = String(process.env.ADMIN_PHONE || "").trim();
+    const password = String(process.env.ADMIN_PASSWORD || "");
+    if (!phone || !password) {
+        console.warn("ADMIN_PHONE and ADMIN_PASSWORD are not set; the admin dashboard cannot be used until an admin account is seeded.");
+        return;
+    }
+    const existing = await User.findOne({ phone });
+    if (existing) {
+        if (existing.role !== "admin") throw new Error(`ADMIN_PHONE belongs to a ${existing.role} account; use a dedicated admin phone number.`);
+        return;
+    }
+    await User.create({
+        name: "Sehat Kaimur Team",
+        phone,
+        passwordHash: await bcrypt.hash(password, 12),
+        role: "admin"
+    });
+    console.log(`Created admin account for ${phone}.`);
+}
 
 function signUser(user) { return jwt.sign({ id: user._id.toString(), role: user.role }, JWT_SECRET, { expiresIn: "7d" }); }
 function auth(role) { return (req, res, next) => { try { const h = req.headers.authorization || ""; const p = jwt.verify(h.startsWith("Bearer ") ? h.slice(7) : "", JWT_SECRET); if (role && p.role !== role) return res.status(403).json({ message: "You do not have permission for this action." }); req.user = p; next(); } catch { res.status(401).json({ message: "Please log in to continue." }); } }; }
@@ -163,13 +193,51 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
 });
 app.post("/api/patients/location", auth("patient"), async (req, res) => { const { consent, latitude, longitude } = req.body; if (!consent) { await User.findByIdAndUpdate(req.user.id, { "location.consent": false }); return res.json({ consent: false }); } if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return res.status(400).json({ message: "Valid location coordinates are required." }); await User.findByIdAndUpdate(req.user.id, { "location.consent": true, "location.latitude": latitude, "location.longitude": longitude, "location.capturedAt": new Date() }); res.json({ consent: true }); });
 app.get("/api/tokens/my", auth("patient"), async (req, res) => { const appointments = await Token.find({ patient: req.user.id }).populate("doctor").populate("patient", "name").sort({ visitDate: -1, tokenNumber: 1 }); res.json(appointments.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) }))); });
+app.post("/api/assistant", auth("patient"), async (req, res) => {
+    if (!GEMINI_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है। Admin से GEMINI_API_KEY set करने को कहें।" });
+    const question = String(req.body.question || "").trim();
+    if (!question || question.length > 1000) return res.status(400).json({ message: "सवाल 1 से 1000 अक्षरों में लिखें।" });
+    const appointments = await Token.find({ patient: req.user.id }).populate("doctor", "name clinic").sort({ visitDate: -1, tokenNumber: 1 }).limit(10);
+    const context = appointments.map((x) => ({ appointmentId: x.appointmentId, doctor: x.doctor?.name, clinic: x.doctor?.clinic, visitDate: x.visitDate, appointmentTime: x.appointmentTime, tokenNumber: x.tokenNumber, status: x.status }));
+    const prompt = `तुम Sehat Bhabua app के Hindi patient-support assistant हो।
+Patient के booking data से token, appointment date/time और status के सवालों का सीधा जवाब दो।
+केवल दिए गए patient data को भरोसेमंद मानो; data न हो तो साफ कहो कि login करके booking देखें।
+सामान्य clinic प्रक्रिया और app उपयोग समझा सकते हो। Diagnosis, prescription या दवा की dose मत बताओ; emergency में तुरंत doctor या local emergency service से संपर्क कहो।
+जवाब 2-4 छोटे Hindi वाक्यों में दो। Patient data: ${JSON.stringify(context)}
+सवाल: ${question}`;
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 300 } })
+        });
+        const data = await response.json();
+        if (!response.ok) return res.status(502).json({ message: "AI assistant से जवाब नहीं मिल पाया। थोड़ी देर बाद फिर कोशिश करें।" });
+        const answer = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+        if (!answer) return res.status(502).json({ message: "AI assistant ने खाली जवाब दिया। फिर कोशिश करें।" });
+        res.json({ answer });
+    } catch (error) {
+        console.error("AI assistant request failed:", error.message);
+        res.status(502).json({ message: "AI assistant अभी उपलब्ध नहीं है।" });
+    }
+});
 app.get("/api/tokens/:id/tracking", auth("patient"), async (req, res) => {
     const appointment = await Token.findOne({ _id: req.params.id, patient: req.user.id }).populate("doctor", "name clinic address averageMinutes").populate("patient", "name");
     if (!appointment) return res.status(404).json({ message: "Appointment not found." });
     const tokens = await Token.find({ doctor: appointment.doctor._id, visitDate: appointment.visitDate });
     const current = tokens.find((x) => ["called", "in_progress"].includes(x.status));
     const ahead = tokens.filter((x) => x.tokenNumber < appointment.tokenNumber && !["cancelled", "no_show", "completed"].includes(x.status)).length;
-    res.json({ appointmentId: appointment.appointmentId, doctor: appointment.doctor, clinic: appointment.clinic, token: appointment.tokenNumber, tokenId: tokenId(appointment.patient?.name, appointment.tokenNumber), visitDate: appointment.visitDate, status: appointment.status, currentRunningToken: current?.tokenNumber || Math.max(0, ...tokens.filter((x) => x.status === "completed").map((x) => x.tokenNumber)), patientsAhead: ahead, estimatedWaitMinutes: ahead * (appointment.doctor.averageMinutes || 10), updatedAt: new Date().toISOString() });
+    const currentRunningToken = current?.tokenNumber || Math.max(0, ...tokens.filter((x) => x.status === "completed").map((x) => x.tokenNumber));
+    res.json({ appointmentId: appointment.appointmentId, doctor: appointment.doctor, clinic: appointment.clinic, token: appointment.tokenNumber, tokenId: tokenId(appointment.patient?.name, appointment.tokenNumber), appointmentTime: appointment.appointmentTime, visitDate: appointment.visitDate, status: appointment.status, currentRunningToken, patientsAhead: ahead, estimatedWaitMinutes: ahead * (appointment.doctor.averageMinutes || 10), updatedAt: new Date().toISOString() });
+});
+app.post("/api/support/questions", auth("patient"), async (req, res) => {
+    const question = String(req.body.question || "").trim();
+    if (!question || question.length > 500) return res.status(400).json({ message: "अपना सवाल 1 से 500 अक्षरों में लिखें।" });
+    const item = await SupportQuestion.create({ patient: req.user.id, question });
+    res.status(201).json({ id: item._id, message: "आपका सवाल team को भेज दिया गया है।" });
+});
+app.get("/api/support/questions/my", auth("patient"), async (req, res) => {
+    const items = await SupportQuestion.find({ patient: req.user.id }).sort({ createdAt: -1 }).limit(20);
+    res.json(items);
 });
 
 app.get("/api/doctor/tokens", auth("doctor"), async (req, res) => { const doctor = await Doctor.findOne({ user: req.user.id }); if (!doctor) return res.status(404).json({ message: "Doctor profile not found." }); const visitDate = req.query.date || today(); const a = await Token.find({ doctor: doctor._id, visitDate }).populate("patient", "name phone").sort({ tokenNumber: 1 }); res.json(a.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) }))); });
@@ -178,9 +246,21 @@ app.patch("/api/doctor/tokens/:id", auth("doctor"), async (req, res) => { const 
 app.post("/api/doctor/next", auth("doctor"), async (req, res) => { const doctor = await Doctor.findOne({ user: req.user.id }); const date = req.body.date || today(); const current = await Token.findOneAndUpdate({ doctor: doctor?._id, visitDate: date, status: { $in: ["booked", "confirmed"] } }, { status: "in_progress" }, { sort: { tokenNumber: 1 }, new: true }); if (!current) return res.status(404).json({ message: "No waiting token." }); res.json(current); });
 app.get("/api/admin/tokens", auth("admin"), async (req, res) => { const filter = req.query.date ? { visitDate: req.query.date } : {}; const a = await Token.find(filter).populate("patient", "name phone location").populate("doctor", "name clinic district").sort({ visitDate: -1, tokenNumber: 1 }); res.json(a.map((x) => ({ id: x._id, patientId: x.patient?._id, patientName: x.patientName || x.patient?.name, patientPhone: x.patientPhone || x.patient?.phone, phone: x.patientPhone || x.patient?.phone, location: x.patient?.location?.consent ? x.patient.location : null, doctor: x.doctor?.name, clinic: x.doctor?.clinic, district: x.doctor?.district, tokenNumber: x.tokenNumber, tokenId: tokenId(x.patientName || x.patient?.name, x.tokenNumber), appointmentId: x.appointmentId, appointmentTime: x.appointmentTime, visitDate: x.visitDate, createdAt: x.createdAt, bookedAtIndia: x.bookedAtIndia, paymentMethod: x.paymentMethod, paymentStatus: x.paymentStatus, paymentId: x.paymentId, status: x.status }))); });
 app.get("/api/admin/dashboard", auth("admin"), async (req, res) => { const date = req.query.date || today(); const tokens = await Token.find({ visitDate: date }).populate("patient", "name phone").populate("doctor", "name clinic district").sort({ tokenNumber: 1 }); res.json({ date, total: tokens.length, byStatus: tokens.reduce((o, t) => { o[t.status] = (o[t.status] || 0) + 1; return o; }, {}), tokens }); });
+app.get("/api/admin/questions", auth("admin"), async (req, res) => {
+    const items = await SupportQuestion.find().populate("patient", "name phone").sort({ status: 1, createdAt: -1 }).limit(100);
+    res.json(items);
+});
+app.patch("/api/admin/questions/:id", auth("admin"), async (req, res) => {
+    const answer = String(req.body.answer || "").trim();
+    if (!answer || answer.length > 1000) return res.status(400).json({ message: "जवाब 1 से 1000 अक्षरों में लिखें।" });
+    const item = await SupportQuestion.findByIdAndUpdate(req.params.id, { answer, status: "answered" }, { new: true, runValidators: true }).populate("patient", "name phone");
+    if (!item) return res.status(404).json({ message: "सवाल नहीं मिला।" });
+    res.json(item);
+});
 app.get("/api/health", (req, res) => res.json({ status: "ok", city: "Bhabua", district: "Kaimur" }));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 mongoose.connect(MONGODB_URI).then(async () => {
+   await ensureAdminAccount();
    try { await Token.collection.dropIndex("doctor_1_patient_1_visitDate_1"); } catch (e) { if (e.codeName !== "IndexNotFound" && e.code !== 27) console.error("Could not update old booking index:", e.message); }
    const oldTokens = await Token.find({ $or: [{ patientName: { $exists: false } }, { patientPhone: { $exists: false } }] }).populate("patient", "name phone");
    for (const oldToken of oldTokens) {

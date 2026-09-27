@@ -41,6 +41,33 @@ and admin dashboards support daily filtering and statuses (booked, confirmed,
 in_progress, completed, cancelled, no_show). Demo doctor passwords are
 `change-this-password`; change them before production.
 
+Patients can open **मेरे tokens** after login to see their token number, the
+currently running token, how many patients are ahead, the estimated waiting
+time, and the clinic's scheduled appointment time. The **Team से सवाल पूछें**
+form stores questions in MongoDB; the admin can answer them from
+`/admin.html`, and the patient's answer appears after refreshing the app.
+
+The **AI सहायक** answers patient-specific token/appointment questions and
+general app or clinic-process questions. It uses Gemini on the server and the
+browser's Hindi speech features to accept voice input and read answers aloud.
+Set `GEMINI_API_KEY` as a secret environment variable in Render; never put the
+key in browser JavaScript or commit it. The assistant is not a doctor and must
+not be used for diagnosis, prescriptions, or emergencies.
+
+Use these private dashboard URLs on the same host:
+
+- Admin/team: `/admin.html` — logs in with `ADMIN_PHONE` and `ADMIN_PASSWORD` and
+  shows every patient's booking, doctor, date, status and contact number.
+- Doctor: `/doctor.html` — logs in with that doctor's account and shows that
+  doctor's patient tokens.
+
+The dashboard only shows bookings stored in the MongoDB database used by that
+server. A local MongoDB database and a MongoDB Atlas database are different
+databases; local bookings will not appear online unless both environments use
+the same database or the data is migrated. On Render, set `MONGODB_URI` to the
+Atlas database used by the deployed app. The server creates the admin account
+from `ADMIN_PHONE` and `ADMIN_PASSWORD` on startup if it does not already exist.
+
 ## Free Render demo deployment
 
 The repository includes a `render.yaml` Blueprint configuration. Before deploying:
@@ -59,5 +86,11 @@ The repository includes a `render.yaml` Blueprint configuration. Before deployin
    ```
 
    Do not put the Atlas URI in GitHub or in `render.yaml`.
+
+8. Open `https://<your-render-host>.onrender.com/admin.html`, sign in with the
+   same `ADMIN_PHONE` and `ADMIN_PASSWORD` values configured in Render, choose
+   the booking date, and press **Refresh**. Run `node seed.js` against the same
+   Atlas URI before testing doctor accounts; otherwise the deployed database
+   will not contain the seeded doctor users.
 
 Render uses `/api/health` as the health check. Free services may sleep when idle, so the first request can take longer during a demo.

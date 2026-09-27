@@ -56,7 +56,24 @@
             <button id="refresh" class="secondary">Refresh appointments</button>
             <div id="appointments"><p>Login के बाद आपके tokens दिखेंगे।</p></div>
         </section>
+        <section class="card">
+            <h2>Team से सवाल पूछें</h2>
+            <p>Token, समय या booking से जुड़ा सवाल भेजें। Login जरूरी है।</p>
+            <textarea id="support-question" maxlength="500" placeholder="जैसे: मेरा नंबर कब आएगा?"></textarea>
+            <div class="actions"><button id="ask-support">सवाल भेजें</button></div>
+            <p id="support-message" class="message"></p>
+            <div id="support-answers"></div>
+        </section>
+        <section class="card" id="ai-assistant">
+            <h2>AI सहायक से पूछें</h2>
+            <p>Token, समय, booking या app से जुड़े सवाल Hindi में पूछें। जवाब अपने-आप आवाज़ में भी सुना जा सकता है।</p>
+            <textarea id="assistant-question" maxlength="1000" placeholder="जैसे: मेरा नंबर कब आएगा?"></textarea>
+            <div class="actions"><button id="assistant-ask">AI से पूछें</button><button id="assistant-mic" class="secondary" type="button">🎙️ बोलकर पूछें</button></div>
+            <p id="assistant-message" class="message"></p>
+            <article id="assistant-answer" class="assistant-answer" hidden></article>
+        </section>
     </main>
+    <footer class="site-footer"><a href="/admin.html">Team dashboard</a><a href="/doctor.html">Doctor dashboard</a></footer>
     <script src="app.js?v=6"></script>
 </body>
 </html>
