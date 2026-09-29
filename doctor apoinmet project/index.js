@@ -3,29 +3,65 @@ require("dotenv").config();
 const path = require("path");
 const crypto = require("crypto");
 const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
+const multer = require("multer");
+
+const upload = multer({ 
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (req, file, cb) => {
+        if (file.mimetype.startsWith("image/")) cb(null, true);
+        else cb(new Error("Only images allowed"), false);
+    }
+});
 
 const app = express();
+const server = http.createServer(app);
+const io = new Server(server, { cors: { origin: "*" } });
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
+const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+let twilioClient = null;
+if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_ACCOUNT_SID.startsWith("AC")) {
+    try {
+        twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+    } catch (e) {
+        console.warn("Twilio init failed:", e.message);
+    }
+}
 if (!MONGODB_URI || !JWT_SECRET) throw new Error("MONGODB_URI and JWT_SECRET are required in a .env file.");
 
 app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, "public")));
 
+io.on("connection", (socket) => {
+    socket.on("join-admin", () => {
+        socket.join("admins");
+        console.log("Admin joined notification room");
+    });
+    socket.on("join-patient", (patientId) => {
+        socket.join(`patient-${patientId}`);
+        console.log(`Patient ${patientId} joined notification room`);
+    });
+});
+
 const states = ["Bihar"];
 // Keep the local Kaimur names used by the seeded doctors, while also exposing
 // every Bihar district in the location selector.
 const districts = ["Araria", "Arwal", "Aurangabad", "Banka", "Begusarai", "Bhagalpur", "Bhojpur", "Buxar", "Darbhanga", "East Champaran", "Gaya", "Gopalganj", "Jamui", "Jehanabad", "Kaimur", "Katihar", "Khagaria", "Kishanganj", "Lakhisarai", "Madhepura", "Madhubani", "Munger", "Muzaffarpur", "Nalanda", "Nawada", "Patna", "Purnia", "Rohtas", "Saharsa", "Samastipur", "Saran", "Sheikhpura", "Sheohar", "Sitamarhi", "Siwan", "Supaul", "Vaishali", "West Champaran"];
 const districtCities = {
-    Kaimur: ["Bhabua", "Mohania", "Kudra", "Ramgarh", "Chainpur", "Adhaura"],
+    Kaimur: ["Bhabua", "Mohania", "Kudra", "Ramgarh", "Chainpur", "Adhaura", "durgawti"],
     Patna: ["Patna City", "Danapur", "Barh", "Masaurhi"],
     Gaya: ["Gaya", "Bodh Gaya", "Sherghati", "Tekari"],
     Muzaffarpur: ["Muzaffarpur", "Kanti", "Sakra"],
@@ -194,30 +230,113 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
 app.post("/api/patients/location", auth("patient"), async (req, res) => { const { consent, latitude, longitude } = req.body; if (!consent) { await User.findByIdAndUpdate(req.user.id, { "location.consent": false }); return res.json({ consent: false }); } if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return res.status(400).json({ message: "Valid location coordinates are required." }); await User.findByIdAndUpdate(req.user.id, { "location.consent": true, "location.latitude": latitude, "location.longitude": longitude, "location.capturedAt": new Date() }); res.json({ consent: true }); });
 app.get("/api/tokens/my", auth("patient"), async (req, res) => { const appointments = await Token.find({ patient: req.user.id }).populate("doctor").populate("patient", "name").sort({ visitDate: -1, tokenNumber: 1 }); res.json(appointments.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) }))); });
 app.post("/api/assistant", auth("patient"), async (req, res) => {
-    if (!GEMINI_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है। Admin से GEMINI_API_KEY set करने को कहें।" });
+    if (!GROQ_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है। Admin से GROQ_API_KEY set करने को कहें।" });
     const question = String(req.body.question || "").trim();
     if (!question || question.length > 1000) return res.status(400).json({ message: "सवाल 1 से 1000 अक्षरों में लिखें।" });
     const appointments = await Token.find({ patient: req.user.id }).populate("doctor", "name clinic").sort({ visitDate: -1, tokenNumber: 1 }).limit(10);
-    const context = appointments.map((x) => ({ appointmentId: x.appointmentId, doctor: x.doctor?.name, clinic: x.doctor?.clinic, visitDate: x.visitDate, appointmentTime: x.appointmentTime, tokenNumber: x.tokenNumber, status: x.status }));
+    const bookingContext = appointments.map((x) => ({ appointmentId: x.appointmentId, doctor: x.doctor?.name, clinic: x.doctor?.clinic, visitDate: x.visitDate, appointmentTime: x.appointmentTime, tokenNumber: x.tokenNumber, status: x.status }));
+    let doctorContext = [];
+    const q = question.toLowerCase();
+    const locationKeywords = ["chainpur", "चैनपुर", "bhabua", "भभुआ", "mohania", "मोहनिया", "kaimur", "कैमूर", "ramgarh", "रामगढ़", "kudra", "कुदरा", "adhaura", "अधौरा", "durgawati", "दुर्गावती"];
+    const matchedLocation = locationKeywords.find(loc => q.includes(loc));
+    let doctorFilter = { active: true };
+    if (matchedLocation) {
+        const cityMap = { "chainpur": "Chainpur", "चैनपुर": "Chainpur", "bhabua": "Bhabua", "भभुआ": "Bhabua", "mohania": "Mohania", "मोहनिया": "Mohania", "kaimur": "Kaimur", "कैमूर": "Kaimur", "ramgarh": "Ramgarh", "रामगढ़": "Ramgarh", "kudra": "Kudra", "कुदरा": "Kudra", "adhaura": "Adhaura", "अधौरा": "Adhaura", "durgawati": "Durgawati", "दुर्गावती": "Durgawati" };
+        const city = cityMap[matchedLocation];
+        if (city) doctorFilter.city = city;
+    }
+    const specialtyKeywords = ["general", "physician", "cardiologist", "कार्डियोलॉजिस्ट", "dermatologist", "त्वचा", "pediatrician", "बाल", "orthopedic", "हड्डी", "dentist", "दांत", "gynecologist", "स्त्री"];
+    const matchedSpecialty = specialtyKeywords.find(s => q.includes(s));
+    if (matchedSpecialty) {
+        const specialtyMap = { "general": "General Physician", "physician": "General Physician", "cardiologist": "Cardiologist", "कार्डियोलॉजिस्ट": "Cardiologist", "dermatologist": "Dermatologist", "त्वचा": "Dermatologist", "pediatrician": "Pediatrician", "बाल": "Pediatrician", "orthopedic": "Orthopedic", "हड्डी": "Orthopedic", "dentist": "Dentist", "दांत": "Dentist", "gynecologist": "Gynecologist", "स्त्री": "Gynecologist" };
+        doctorFilter.specialty = new RegExp(specialtyMap[matchedSpecialty], "i");
+    }
+    if (Object.keys(doctorFilter).length > 1 || doctorFilter.city || doctorFilter.specialty) {
+        const doctors = await Doctor.find(doctorFilter).select("name specialty clinic city district address fee averageMinutes tokenLimit availableDays openingTime closingTime").limit(20);
+        doctorContext = doctors.map(d => ({ name: d.name, specialty: d.specialty, clinic: d.clinic, city: d.city, district: d.district, address: d.address, fee: d.fee, availableDays: d.availableDays, openingTime: d.openingTime, closingTime: d.closingTime, tokenLimit: d.tokenLimit }));
+    }
     const prompt = `तुम Sehat Bhabua app के Hindi patient-support assistant हो।
 Patient के booking data से token, appointment date/time और status के सवालों का सीधा जवाब दो।
-केवल दिए गए patient data को भरोसेमंद मानो; data न हो तो साफ कहो कि login करके booking देखें।
-सामान्य clinic प्रक्रिया और app उपयोग समझा सकते हो। Diagnosis, prescription या दवा की dose मत बताओ; emergency में तुरंत doctor या local emergency service से संपर्क कहो।
-जवाब 2-4 छोटे Hindi वाक्यों में दो। Patient data: ${JSON.stringify(context)}
+सार्वजनिक रूप से उपलब्ध doctors की जानकारी भी उपयोग करो।
+सामान्य स्वास्थ्य जानकारी, दवा के बारे में सामान्य ज्ञान, बीमारियों के लक्षण, बचाव के तरीके, lifestyle tips आदि पर भी जवाब दे सकते हो।
+**सुरक्षा नियम:**
+- Diagnosis मत दो (ये मत कहो "आपको ये बीमारी है")
+- Prescription या दवा की specific dose मत बताओ
+- Emergency में तुरंत doctor या local emergency service (108/112) से संपर्क कहो
+- गंभीर symptoms हों तो "डॉक्टर से मिलें" कहो
+जवाब 3-5 छोटे Hindi वाक्यों में दो, सरल भाषा में।
+Patient booking data: ${JSON.stringify(bookingContext)}
+Public doctor data (relevant): ${JSON.stringify(doctorContext)}
 सवाल: ${question}`;
     try {
-        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`, {
-            method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, maxOutputTokens: 300 } })
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${GROQ_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: GROQ_MODEL,
+                messages: [{ role: "user", content: prompt }],
+                temperature: 0.2,
+                max_tokens: 300
+            })
         });
         const data = await response.json();
         if (!response.ok) return res.status(502).json({ message: "AI assistant से जवाब नहीं मिल पाया। थोड़ी देर बाद फिर कोशिश करें।" });
-        const answer = data.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("").trim();
+        const answer = data.choices?.[0]?.message?.content?.trim();
         if (!answer) return res.status(502).json({ message: "AI assistant ने खाली जवाब दिया। फिर कोशिश करें।" });
         res.json({ answer });
     } catch (error) {
         console.error("AI assistant request failed:", error.message);
         res.status(502).json({ message: "AI assistant अभी उपलब्ध नहीं है।" });
+    }
+});
+app.post("/api/assistant/image", auth("patient"), upload.single("image"), async (req, res) => {
+    if (!GROQ_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है।" });
+    if (!req.file) return res.status(400).json({ message: "Image required." });
+    const question = String(req.body.question || "").trim() || "इस दवा/टैबलेट की पहचान करें और इसके उपयोग, खुराक की सामान्य जानकारी, सावधानियां और साइड इफेक्ट्स सरल हिंदी में बताएं।";
+    const base64Image = req.file.buffer.toString("base64");
+    const mimeType = req.file.mimetype;
+    const visionModel = "llama-3.2-90b-vision-preview";
+    const prompt = `तुम Sehat Bhabua app के Hindi medical assistant हो। 
+दवा/टैबलेट/कैप्सूल/सिरप की फोटो का विश्लेषण करो।
+पहचान बताओ: नाम (ब्रांड + जेनेरिक), उपयोग (किस बीमारी के लिए), सामान्य खुराक जानकारी, सावधानियां, संभावित साइड इफेक्ट्स।
+**सुरक्षा नियम:**
+- Exact dosage मत बताओ (डॉक्टर से पूछें कहो)
+- Prescription मत दो
+- "डॉक्टर/फार्मासिस्ट से सलाह लें" जरूर कहो
+- गलत पहचान हो सकती है, disclaimer दो
+जवाब 4-6 छोटे Hindi वाक्यों में दो, सरल भाषा में।
+सवाल: ${question}`;
+    try {
+        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${GROQ_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: visionModel,
+                messages: [{
+                    role: "user",
+                    content: [
+                        { type: "text", text: prompt },
+                        { type: "image_url", image_url: { url: `data:${mimeType};base64,${base64Image}` } }
+                    ]
+                }],
+                temperature: 0.1,
+                max_tokens: 500
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) return res.status(502).json({ message: "Image analysis failed. Try again." });
+        const answer = data.choices?.[0]?.message?.content?.trim();
+        if (!answer) return res.status(502).json({ message: "Could not analyze image." });
+        res.json({ answer, disclaimer: "यह जानकारी केवल सामान्य ज्ञान के लिए है। कृपया दवा लेने से पहले डॉक्टर या फार्मासिस्ट से जरूर सलाह लें।" });
+    } catch (error) {
+        console.error("Image analysis failed:", error.message);
+        res.status(502).json({ message: "Image analysis unavailable." });
     }
 });
 app.get("/api/tokens/:id/tracking", auth("patient"), async (req, res) => {
@@ -233,6 +352,14 @@ app.post("/api/support/questions", auth("patient"), async (req, res) => {
     const question = String(req.body.question || "").trim();
     if (!question || question.length > 500) return res.status(400).json({ message: "अपना सवाल 1 से 500 अक्षरों में लिखें।" });
     const item = await SupportQuestion.create({ patient: req.user.id, question });
+    const populated = await SupportQuestion.findById(item._id).populate("patient", "name phone");
+    io.to("admins").emit("new-question", {
+        questionId: item._id,
+        patientName: populated.patient?.name,
+        patientPhone: populated.patient?.phone,
+        question: populated.question,
+        createdAt: populated.createdAt
+    });
     res.status(201).json({ id: item._id, message: "आपका सवाल team को भेज दिया गया है।" });
 });
 app.get("/api/support/questions/my", auth("patient"), async (req, res) => {
@@ -253,8 +380,24 @@ app.get("/api/admin/questions", auth("admin"), async (req, res) => {
 app.patch("/api/admin/questions/:id", auth("admin"), async (req, res) => {
     const answer = String(req.body.answer || "").trim();
     if (!answer || answer.length > 1000) return res.status(400).json({ message: "जवाब 1 से 1000 अक्षरों में लिखें।" });
-    const item = await SupportQuestion.findByIdAndUpdate(req.params.id, { answer, status: "answered" }, { new: true, runValidators: true }).populate("patient", "name phone");
+    const item = await SupportQuestion.findByIdAndUpdate(req.params.id, { answer, status: "answered" }, { new: true, runValidators: true }).populate("patient", "name phone _id");
     if (!item) return res.status(404).json({ message: "सवाल नहीं मिला।" });
+    io.to(`patient-${item.patient._id}`).emit("answer-received", {
+        questionId: item._id,
+        question: item.question,
+        answer: item.answer,
+        answeredAt: new Date()
+    });
+    if (twilioClient && item.patient?.phone) {
+        const to = `+91${item.patient.phone}`;
+        const body = `Sehat Bhabua: आपके सवाल "${item.question.slice(0, 50)}..." का जवाब: ${answer.slice(0, 100)}`;
+        try {
+            await twilioClient.messages.create({ body, from: TWILIO_PHONE_NUMBER, to });
+            console.log(`SMS sent to ${to}`);
+        } catch (err) {
+            console.error("Twilio SMS failed:", err.message);
+        }
+    }
     res.json(item);
 });
 app.get("/api/health", (req, res) => res.json({ status: "ok", city: "Bhabua", district: "Kaimur" }));
@@ -266,5 +409,5 @@ mongoose.connect(MONGODB_URI).then(async () => {
    for (const oldToken of oldTokens) {
        if (oldToken.patient) await Token.updateOne({ _id: oldToken._id }, { $set: { patientName: oldToken.patient.name, patientPhone: oldToken.patient.phone } });
    }
-   app.listen(PORT, "0.0.0.0", () => console.log(`Bhabua token server running on port ${PORT}`));
+   server.listen(PORT, "0.0.0.0", () => console.log(`Bhabua token server running on port ${PORT}`));
 }).catch((e) => { console.error("MongoDB connection failed:", e.message); process.exit(1); });

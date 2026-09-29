@@ -65,15 +65,22 @@
             <div id="support-answers"></div>
         </section>
         <section class="card" id="ai-assistant">
-            <h2>AI सहायक से पूछें</h2>
-            <p>Token, समय, booking या app से जुड़े सवाल Hindi में पूछें। जवाब अपने-आप आवाज़ में भी सुना जा सकता है।</p>
-            <textarea id="assistant-question" maxlength="1000" placeholder="जैसे: मेरा नंबर कब आएगा?"></textarea>
-            <div class="actions"><button id="assistant-ask">AI से पूछें</button><button id="assistant-mic" class="secondary" type="button">🎙️ बोलकर पूछें</button></div>
+            <h2>AI सहायक</h2>
+            <p class="section-hint">सवाल लिखें, बोलें या दवा की फोटो भेजें</p>
+            <div id="assistant-chat" class="assistant-chat"></div>
+            <div class="assistant-input-row">
+                <button id="assistant-attach" class="icon-btn" type="button" title="फोटो भेजें" aria-label="Attach image">📎</button>
+                <input type="file" id="assistant-image" accept="image/*" capture="environment" hidden>
+                <textarea id="assistant-question" maxlength="1000" placeholder="सवाल लिखें... (उदाहरण: मेरा नंबर कब आएगा? / paracetamol kis kaam aata hai / dengue ke lakshan)" rows="1"></textarea>
+                <button id="assistant-mic" class="icon-btn" type="button" title="बोलकर पूछें" aria-label="Voice input">🎙️</button>
+                <button id="assistant-ask" class="icon-btn primary" type="button" title="भेजें" aria-label="Send">➤</button>
+            </div>
+            <div id="image-preview" class="image-preview" hidden></div>
             <p id="assistant-message" class="message"></p>
-            <article id="assistant-answer" class="assistant-answer" hidden></article>
         </section>
     </main>
     <footer class="site-footer"><a href="/admin.html">Team dashboard</a><a href="/doctor.html">Doctor dashboard</a></footer>
-    <script src="app.js?v=6"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="app.js?v=10"></script>
 </body>
 </html>

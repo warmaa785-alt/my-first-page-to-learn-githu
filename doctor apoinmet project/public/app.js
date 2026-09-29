@@ -1,4 +1,4 @@
-const state = { token: localStorage.getItem("bhabua-token") || "", doctors: [], user: null };
+const state = { token: localStorage.getItem("bhabua-token") || "", doctors: [], user: null, socket: null };
 const $ = (s) => document.querySelector(s);
 async function api(url, options = {}) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -8,6 +8,32 @@ async function api(url, options = {}) {
     if (response.status === 401) { state.token = ""; localStorage.removeItem("bhabua-token"); updateIdentity(); }
     if (!response.ok) throw new Error(data.message || "Request failed.");
     return data;
+}
+function showNotification(title, body) {
+    if (Notification.permission === "granted") {
+        new Notification(title, { body, icon: "/favicon.ico", tag: "patient-notification" });
+    }
+}
+function initSocket() {
+    if (state.socket || !state.token) return;
+    state.socket = io();
+    state.socket.on("connect", () => {
+        console.log("Patient socket connected");
+        if (state.user?.id) state.socket.emit("join-patient", state.user.id);
+    });
+    state.socket.on("answer-received", (data) => {
+        console.log("Answer received:", data);
+        showNotification("✅ जवाब मिल गया!", `आपके सवाल का जवाब: ${data.answer.slice(0, 60)}...`);
+        loadSupportQuestions();
+    });
+    state.socket.on("disconnect", () => {
+        console.log("Socket disconnected, reconnecting...");
+        setTimeout(initSocket, 5000);
+    });
+    state.socket.on("connect_error", (err) => {
+        console.error("Socket error:", err);
+        setTimeout(initSocket, 5000);
+    });
 }
 function updateIdentity() {
     $("#patient-identity").textContent = state.user ? `${state.user.name} · ${state.user.phone}` : "Guest";
@@ -19,9 +45,10 @@ async function authenticate(endpoint) {
         const data = await api(`/api/auth/${endpoint}`, { method: "POST", body: JSON.stringify({ name: $("#name").value, phone: $("#phone").value, password: $("#password").value }) });
         state.token = data.token; state.user = data.user; localStorage.setItem("bhabua-token", state.token);
         $("#auth-message").textContent = `नमस्ते ${data.user.name}, अब आप token ले सकते हैं।`; updateIdentity(); loadAppointments();
+        Notification.requestPermission().then(() => { initSocket(); });
     } catch (e) { $("#auth-message").textContent = e.message; }
 }
-async function loadSession() { if (!state.token) return; try { state.user = (await api("/api/auth/me")).user; updateIdentity(); loadAppointments(); } catch { updateIdentity(); } }
+async function loadSession() { if (!state.token) return; try { state.user = (await api("/api/auth/me")).user; updateIdentity(); loadAppointments(); Notification.requestPermission().then(() => { initSocket(); }); } catch { updateIdentity(); } }
 async function loadLocations() {
     try {
         const data = await api("/api/locations");
@@ -102,20 +129,79 @@ function speakAssistantAnswer(text) {
     speech.rate = 0.95;
     window.speechSynthesis.speak(speech);
 }
-function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character])); }
-async function askAssistant() {
-    if (!state.token) { $("#auth-panel").hidden = false; $("#assistant-message").textContent = "AI assistant के लिए पहले login करें।"; return; }
-    const question = $("#assistant-question").value.trim();
-    if (!question) { $("#assistant-message").textContent = "पहले अपना सवाल लिखें या बोलकर पूछें।"; return; }
-    $("#assistant-message").textContent = "AI जवाब तैयार कर रहा है...";
-    try {
-        const data = await api("/api/assistant", { method: "POST", body: JSON.stringify({ question }) });
-        $("#assistant-answer").hidden = false;
-        $("#assistant-answer").innerHTML = `<b>AI सहायक:</b><p>${escapeHtml(data.answer)}</p><button class="secondary assistant-speak" type="button">🔊 जवाब सुनें</button>`;
-        $("#assistant-message").textContent = "";
-        speakAssistantAnswer(data.answer);
-    } catch (error) { $("#assistant-message").textContent = error.message; }
+function escapeHtml(value) { return String(value).replace(/[&<>"']/g, (character) => ({ "&": "&", "<": "<", ">": ">", '"': "\"", "'": "'" }[character])); }
+function addChatMessage(role, content, hasDisclaimer = false) {
+    const chat = $("#assistant-chat");
+    const div = document.createElement("div");
+    div.className = `assistant-msg ${role === "user" ? "user" : "ai"}`;
+    const avatar = role === "user" ? "👤" : "🤖";
+    const avatarBg = role === "user" ? "user" : "ai";
+    let html = `<div class="assistant-avatar">${avatar}</div><div class="assistant-bubble">${escapeHtml(content)}`;
+    if (hasDisclaimer) html += `<div class="disclaimer">⚠️ यह जानकारी केवल सामान्य ज्ञान के लिए है। दवा लेने से पहले डॉक्टर या फार्मासिस्ट से जरूर सलाह लें।</div>`;
+    html += `<button class="secondary assistant-speak" type="button" style="margin-top: 8px; padding: 6px 12px; font-size: 0.85rem;">🔊 सुनें</button></div>`;
+    div.innerHTML = html;
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+    div.querySelector(".assistant-speak")?.addEventListener("click", () => speakAssistantAnswer(content));
 }
+async function askAssistant() {
+    if (!state.token) { $("#auth-panel").hidden = false; $("#assistant-message").textContent = "AI के लिए पहले login करें।"; return; }
+    const question = $("#assistant-question").value.trim();
+    if (!question && !selectedImageFile) { $("#assistant-message").textContent = "सवाल लिखें या फोटो चुनें।"; return; }
+    $("#assistant-message").textContent = "";
+    if (question) {
+        addChatMessage("user", question);
+        $("#assistant-question").value = "";
+        $("#assistant-question").style.height = "auto";
+    }
+    const thinkingDiv = document.createElement("div");
+    thinkingDiv.className = "assistant-msg ai";
+    thinkingDiv.innerHTML = `<div class="assistant-avatar">🤖</div><div class="assistant-bubble">सोच रहा है... <span class="typing">⋯</span></div>`;
+    $("#assistant-chat").appendChild(thinkingDiv);
+    $("#assistant-chat").scrollTop = $("#assistant-chat").scrollHeight;
+    try {
+        let data;
+        if (selectedImageFile) {
+            const formData = new FormData();
+            formData.append("image", selectedImageFile);
+            if (question) formData.append("question", question);
+            const response = await fetch("/api/assistant/image", {
+                method: "POST",
+                headers: { "Authorization": `Bearer ${state.token}` },
+                body: formData
+            });
+            data = await response.json();
+            if (!response.ok) throw new Error(data.message || "Analysis failed");
+            clearImagePreview();
+            thinkingDiv.remove();
+            addChatMessage("ai", data.answer, true);
+        } else {
+            const response = await api("/api/assistant", { method: "POST", body: JSON.stringify({ question }) });
+            thinkingDiv.remove();
+            addChatMessage("ai", response.answer);
+        }
+    } catch (error) {
+        thinkingDiv.remove();
+        $("#assistant-message").textContent = error.message;
+    }
+}
+let selectedImageFile = null;
+function showImagePreview(file) {
+    if (!file) return;
+    selectedImageFile = file;
+    const url = URL.createObjectURL(file);
+    const preview = $("#image-preview");
+    preview.hidden = false;
+    preview.innerHTML = `<img src="${url}" alt="Preview"><button type="button" onclick="clearImagePreview()" aria-label="Remove image">×</button>`;
+    addChatMessage("user", "📷 फोटो भेजी गई", false);
+}
+function clearImagePreview() {
+    selectedImageFile = null;
+    $("#image-preview").hidden = true;
+    $("#image-preview").innerHTML = "";
+    $("#assistant-image").value = "";
+}
+window.clearImagePreview = clearImagePreview;
 async function loadAppointments() {
     if (!state.token) { $("#appointments").innerHTML = "<p>Login के बाद आपके tokens दिखेंगे।</p>"; return; }
     try {
@@ -143,7 +229,6 @@ $("#verify-otp").addEventListener("click", async () => { try { const d = await a
 $("#refresh").addEventListener("click", loadAppointments);
 $("#ask-support").addEventListener("click", async () => { if (!state.token) { $("#auth-panel").hidden = false; $("#support-message").textContent = "सवाल भेजने के लिए पहले login करें।"; return; } try { const d = await api("/api/support/questions", { method: "POST", body: JSON.stringify({ question: $("#support-question").value }) }); $("#support-question").value = ""; $("#support-message").textContent = d.message; loadSupportQuestions(); } catch (e) { $("#support-message").textContent = e.message; } });
 $("#assistant-ask").addEventListener("click", askAssistant);
-$("#assistant-answer").addEventListener("click", () => { const answer = $("#assistant-answer p")?.textContent; if (answer) speakAssistantAnswer(answer); });
 $("#assistant-mic").addEventListener("click", () => {
     const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!Recognition) { $("#assistant-message").textContent = "इस browser में voice input उपलब्ध नहीं है। सवाल लिखकर पूछें।"; return; }
@@ -153,6 +238,10 @@ $("#assistant-mic").addEventListener("click", () => {
     recognition.onerror = () => { $("#assistant-message").textContent = "आवाज़ समझ नहीं आई। फिर कोशिश करें या सवाल लिखें।"; };
     recognition.start();
 });
+$("#assistant-attach").addEventListener("click", () => { $("#assistant-image").capture = "environment"; $("#assistant-image").click(); });
+$("#assistant-image").addEventListener("change", (e) => { const file = e.target.files[0]; if (file) showImagePreview(file); });
+$("#assistant-question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
+$("#assistant-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askAssistant(); } });
 $("#search").addEventListener("input", () => {
     clearTimeout(suggestionTimer);
     suggestionTimer = setTimeout(loadSearchSuggestions, 180);
