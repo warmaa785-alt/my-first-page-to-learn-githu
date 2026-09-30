@@ -124,4 +124,26 @@ button.secondary { background: #e5f1f0; color: #0f6b70; }
     .actions { flex-direction: column; }
     .actions button, .booking-form button { width: 100%; }
     .doctor-summary { align-items: flex-start; flex-direction: column; gap: 6px; }
+    .assistant-chat { max-height: 280px; padding: 4px 2px; }
+    .assistant-msg { max-width: 90%; gap: 8px; }
+    .assistant-avatar { height: 32px; width: 32px; font-size: 1rem; }
+    .assistant-bubble { padding: 10px 14px; font-size: 0.95rem; border-radius: 14px; }
+    .assistant-input-row { border-radius: 24px; padding: 4px 8px; gap: 6px; }
+    .icon-btn { height: 40px; width: 40px; font-size: 1.2rem; }
+    .icon-btn.primary { height: 40px; width: 40px; }
+    .assistant-input-row textarea { min-height: 40px; max-height: 100px; padding: 6px 4px; font-size: 1rem; }
+    .search-box input { padding: 14px 16px 14px 44px; font-size: 1rem; }
+    .search-icon { font-size: 1.4rem; left: 14px; top: 10px; }
+    .doctor-avatar { height: 40px; width: 40px; }
+    .doctor h3 { font-size: 1.1rem; }
+    .doctor p, .appointment p { font-size: 0.9rem; }
+    .appointment { padding: 14px; }
+    .tracking { padding: 10px; }
+    .info-grid div { padding: 12px; }
+    .info-grid strong { font-size: 0.8rem; }
+    .info-grid b { font-size: 1rem; }
+    .section-heading h2 { font-size: 1.2rem; }
+    .hero h1 { font-size: 2rem; }
+    .hero > p:not(.tag) { font-size: 1rem; }
+    .site-footer { padding: 0 12px 20px; gap: 12px; }
 }

@@ -238,7 +238,43 @@ $("#assistant-mic").addEventListener("click", () => {
     recognition.onerror = () => { $("#assistant-message").textContent = "आवाज़ समझ नहीं आई। फिर कोशिश करें या सवाल लिखें।"; };
     recognition.start();
 });
-$("#assistant-attach").addEventListener("click", () => { $("#assistant-image").capture = "environment"; $("#assistant-image").click(); });
+function openCameraOrGallery(useCamera) {
+    const input = $("#assistant-image");
+    if (useCamera) {
+        const isSecure = location.protocol === "https:" || location.hostname === "localhost" || location.hostname === "127.0.0.1";
+        if (!isSecure && !navigator.mediaDevices) {
+            $("#assistant-message").textContent = "कैमरा के लिए HTTPS या localhost जरूरी है। गैलरी से चुनें।";
+            input.capture = "";
+            input.click();
+            return;
+        }
+        input.capture = "environment";
+    } else {
+        input.capture = "";
+    }
+    input.click();
+}
+$("#assistant-attach").addEventListener("click", () => {
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    if (isMobile) {
+        const actionSheet = document.createElement("div");
+        actionSheet.style.cssText = "position:fixed;bottom:0;left:0;right:0;background:white;padding:16px;border-radius:16px 16px 0 0;box-shadow:0 -4px 20px #0003;z-index:9999;display:flex;flex-direction:column;gap:12px;";
+        actionSheet.innerHTML = `
+            <div style="font-weight:bold;color:#0f6b70;padding:0 12px;">फोटो चुनें</div>
+            <button id="opt-camera" style="padding:16px;border:0;background:#f5fbfa;border-radius:10px;font-size:1rem;display:flex;align-items:center;gap:12px;"><span style="font-size:1.5rem;">📸</span>कैमरा से खींचें</button>
+            <button id="opt-gallery" style="padding:16px;border:0;background:#f5fbfa;border-radius:10px;font-size:1rem;display:flex;align-items:center;gap:12px;"><span style="font-size:1.5rem;">🖼️</span>गैलरी से चुनें</button>
+            <button id="opt-cancel" style="padding:12px;border:0;background:transparent;color:#0f6b70;font-size:1rem;">रद्द करें</button>
+        `;
+        document.body.appendChild(actionSheet);
+        const remove = () => { actionSheet.remove(); };
+        $("#opt-camera").addEventListener("click", () => { remove(); openCameraOrGallery(true); });
+        $("#opt-gallery").addEventListener("click", () => { remove(); openCameraOrGallery(false); });
+        $("#opt-cancel").addEventListener("click", remove);
+        actionSheet.addEventListener("click", (e) => { if (e.target === actionSheet) remove(); });
+    } else {
+        openCameraOrGallery(true);
+    }
+});
 $("#assistant-image").addEventListener("change", (e) => { const file = e.target.files[0]; if (file) showImagePreview(file); });
 $("#assistant-question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
 $("#assistant-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askAssistant(); } });
