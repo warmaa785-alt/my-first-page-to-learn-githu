@@ -36,10 +36,19 @@
 Open `http://localhost:3000`.
 
 Patients can filter State → District → Doctor/Clinic, see schedules and live capacity,
-book one atomic token per doctor/date, and view appointment history by status. Doctor
+book one or more patient tokens per doctor/date in a single login, and view appointment history by status. Doctor
 and admin dashboards support daily filtering and statuses (booked, confirmed,
 in_progress, completed, cancelled, no_show). Demo doctor passwords are
 `change-this-password`; change them before production.
+
+For paid UPI bookings, the selected slot is held for 30 minutes while payment is
+pending. The patient submits the UPI transaction reference; an admin must verify
+the transaction and approve it before the token is issued. Unpaid bookings that
+do not submit a reference in time are cancelled and their slot is released.
+One login can book tokens for multiple family members in one booking. Enter each
+patient's name and age; a ₹1.89 platform fee is added per patient/token to the
+doctor's fee. The UPI total is the resulting per-token amount multiplied by the
+number of patients, and admin approval issues one token per patient.
 
 Patients can open **मेरे tokens** after login to see their token number, the
 currently running token, how many patients are ahead, the estimated waiting
@@ -76,7 +85,7 @@ The repository includes a `render.yaml` Blueprint configuration. Before deployin
 2. In MongoDB Atlas, create a new database user and rotate any password that was previously shared.
 3. Add the Render outbound access rule required for the demo database (Atlas `0.0.0.0/0` is convenient for a demo but should be restricted for production).
 4. In Render, choose **New > Blueprint**, select the GitHub repository, and apply `render.yaml`.
-5. Set the generated service's `MONGODB_URI` to the Atlas connection string for the `bhabua_token` database. Also set `ADMIN_PHONE` and a strong `ADMIN_PASSWORD`. For patient email OTP, set `SMTP_USER` to the Gmail address that sends messages and `SMTP_PASS` to that account's 16-character Google App Password (not its normal Gmail password). The Blueprint sets `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=587`; after adding the secret values, sync/redeploy the Blueprint so the running service picks them up. Never commit these credentials or put them in browser code.
+5. Set the generated service's `MONGODB_URI` to the Atlas connection string for the `bhabua_token` database. Also set `ADMIN_PHONE` and a strong `ADMIN_PASSWORD`. For email OTP and question notifications, set `SMTP_USER` to the Gmail address that sends messages and `SMTP_PASS` to that account's 16-character Google App Password (not its normal Gmail password). The Blueprint uses Gmail SMTP over port `465`; sync/redeploy the Blueprint after adding the credentials. Never commit these credentials or put them in browser code.
 6. Wait for the deploy to become live, then open the generated `https://...onrender.com` URL.
 7. Run the seed command once against Atlas from a trusted local terminal:
 

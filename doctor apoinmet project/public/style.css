@@ -160,3 +160,53 @@ select { border: 1px solid #cbdcdb; border-radius: 7px; font: inherit; padding: 
 .upi-pay-link { background: #0f6b70; border-radius: 7px; color: white; display: inline-block; font-weight: bold; margin: 8px 0; padding: 12px 18px; text-decoration: none; }
 .upi-qr { background: white; border: 1px solid #dce8e8; border-radius: 8px; display: block; height: 240px; margin: 12px 0; max-width: 100%; padding: 8px; width: 240px; }
 button:disabled { cursor: wait; opacity: .6; }
+
+@media (max-width: 650px) {
+    body { min-width: 0; }
+    header {
+        padding: max(12px, env(safe-area-inset-top)) 16px 12px;
+        position: relative;
+    }
+    header > strong, header > span { overflow-wrap: anywhere; }
+    .header-auth { width: 100%; }
+    main { width: 100%; }
+    .card, .appointment, .doctor, .booking-confirmation { min-width: 0; }
+    button {
+        min-height: 44px;
+        padding: 11px 14px;
+        touch-action: manipulation;
+    }
+    input, select, textarea {
+        font-size: 16px;
+        min-height: 48px;
+        scroll-margin-top: 16px;
+    }
+    textarea { min-height: 100px; }
+    .patient-entry {
+        background: #f7fbfa;
+        border: 1px solid #dce8e8;
+        border-radius: 10px;
+        gap: 10px;
+        margin-bottom: 10px;
+        padding: 12px;
+    }
+    .patient-entry label { min-width: 0; }
+    .patient-entry input { max-width: none; }
+    .doctor, .appointment, .booking-confirmation, #admin-payments li {
+        overflow-wrap: anywhere;
+    }
+    .appointment ul { padding-left: 20px; }
+    .upi-qr { height: min(240px, 70vw); width: min(240px, 70vw); }
+    .site-footer { flex-wrap: wrap; }
+}
+
+@media (max-width: 380px) {
+    header { padding-left: 12px; padding-right: 12px; }
+    main { padding-left: 10px; padding-right: 10px; }
+    .card { padding: 14px; }
+    .hero { padding: 22px 16px; }
+    .hero h1 { font-size: 1.8rem; }
+    .header-auth { gap: 6px; }
+    .assistant-input-row { gap: 3px; padding-left: 5px; padding-right: 5px; }
+    .icon-btn, .icon-btn.primary { flex: 0 0 38px; height: 38px; width: 38px; }
+}

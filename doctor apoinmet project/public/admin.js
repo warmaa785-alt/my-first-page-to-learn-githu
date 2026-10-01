@@ -31,7 +31,7 @@ function indiaDateTime(value) {
 function renderAppointments(items) {
     admin$("#admin-appointments").innerHTML = items.length ? items.map((item) => `
         <article class="appointment">
-            <strong>${escapeHtml(item.tokenId)} · ${escapeHtml(item.status)}</strong>
+            <strong>${escapeHtml(item.tokenId || (item.status === "awaiting_payment" ? "Payment verification pending" : "Token not assigned"))} · ${escapeHtml(item.status)}</strong>
             <p>
                 <b>Appointment ID:</b> ${escapeHtml(item.appointmentId || "—")}<br>
                 <b>Patient:</b> ${escapeHtml(item.patientName)} · ${escapeHtml(item.phone || item.patientPhone || "—")}<br>
@@ -48,13 +48,13 @@ function renderPayments(items) {
     const pending = items.filter((item) => item.paymentMethod === "upi_manual" && item.paymentStatus === "submitted");
     admin$("#admin-payments").innerHTML = pending.length ? pending.map((item) => `
         <article class="appointment">
-            <strong>${escapeHtml(item.appointmentId)} · ₹${escapeHtml(item.fee)}</strong>
+            <strong>${escapeHtml(item.appointmentId)} · ${item.patients.length} मरीज · ₹${escapeHtml(item.fee)}</strong>
             <p>
-                Patient: ${escapeHtml(item.patientName)} · ${escapeHtml(item.patientPhone)}<br>
                 Doctor: ${escapeHtml(item.doctor)} · ${escapeHtml(item.clinic)}<br>
                 UPI reference: <b>${escapeHtml(item.paymentReference)}</b><br>
-                Date: ${escapeHtml(item.visitDate)} · Token ${escapeHtml(item.tokenNumber)}
+                Date: ${escapeHtml(item.visitDate)} · payment approval के बाद tokens issue होंगे
             </p>
+            <ul>${item.patients.map((patient) => `<li>${escapeHtml(patient.name)} · उम्र ${escapeHtml(patient.age || "—")} · ${escapeHtml(patient.phone)} · Reserved slot ${escapeHtml(patient.slotNumber || "—")}</li>`).join("")}</ul>
             <div class="actions">
                 <button type="button" data-payment="${escapeHtml(item.id)}" data-status="confirmed">UPI में verify करके approve</button>
                 <button type="button" class="secondary" data-payment="${escapeHtml(item.id)}" data-status="failed">Payment नहीं मिला</button>
@@ -124,7 +124,7 @@ function initSocket() {
         load();
     });
     adminState.socket.on("payment-reference-submitted", (data) => {
-        showNotification("UPI payment verify करें", `${data.appointmentId}: ${data.paymentReference}`);
+        showNotification("UPI payment verify करें", `${data.patientCount} मरीज · ${data.appointmentId}: ${data.paymentReference}`);
         load();
     });
     adminState.socket.on("disconnect", () => {

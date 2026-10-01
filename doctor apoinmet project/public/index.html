@@ -7,7 +7,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Doctor of Bihar</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=2">
     <link rel="manifest" href="manifest.json">
 </head>
 <body>
@@ -36,10 +36,10 @@
             <div class="grid">
                 <input id="name" placeholder="पूरा नाम (नए users के लिए)" hidden>
                 <input id="email" type="email" autocomplete="email" placeholder="Email address">
-                <input id="phone" type="tel" autocomplete="tel" placeholder="Contact mobile (नए users के लिए; verify नहीं होगा)" inputmode="tel" hidden>
+                <input id="phone" type="tel" autocomplete="tel" placeholder="Mobile number (जैसे 9876543210)" inputmode="tel" hidden>
             </div>
             <div class="actions"><button id="send-otp">Email पर OTP भेजें</button></div>
-            <small class="help-text">OTP आपके email पर आएगा। नए account के लिए नाम और clinic contact mobile number भी भरें।</small>
+            <small class="help-text">OTP आपके email पर आएगा। नए account के लिए OTP verify करते समय अपना नाम और 10-digit mobile number भी भरें।</small>
             <div id="otp-panel" hidden>
                 <input id="otp" placeholder="6-digit OTP" inputmode="numeric" maxlength="6">
                 <div class="actions"><button id="verify-otp">Verify OTP & Login</button><button id="resend-otp" class="secondary">Resend OTP</button></div>
@@ -95,6 +95,6 @@
     </main>
     <footer class="site-footer"><a href="/admin.html">Team dashboard</a><a href="/doctor.html">Doctor dashboard</a></footer>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="app.js?v=20"></script>
+    <script src="app.js?v=26"></script>
 </body>
 </html>

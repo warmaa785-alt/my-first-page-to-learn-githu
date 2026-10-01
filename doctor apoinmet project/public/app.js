@@ -1,5 +1,6 @@
 const state = { token: localStorage.getItem("bhabua-token") || "", doctors: [], visibleDoctorCount: 0, user: null, socket: null };
 const $ = (s) => document.querySelector(s);
+const platformFeePerToken = 1.89;
 const doctorPageSize = () => window.matchMedia("(max-width: 650px)").matches ? 4 : 8;
 
 async function api(url, options = {}) {
@@ -36,7 +37,13 @@ function initSocket() {
         loadSupportQuestions();
     });
     state.socket.on("payment-status-updated", (data) => {
-        $("#support-message").textContent = `${data.appointmentId}: payment status ${data.paymentStatus}`;
+        const message = data.paymentStatus === "confirmed"
+            ? `Payment verified. ${data.tokens?.length > 1
+                ? `सभी ${data.tokens.length} मरीजों के tokens जारी हो गए।`
+                : `आपका token #${data.tokens?.[0]?.tokenNumber || data.tokenNumber} जारी हो गया।`}`
+            : "Payment verify नहीं हुआ; token issue नहीं किया गया।";
+        $("#support-message").textContent = `${data.appointmentId}: ${message}`;
+        showNotification("Payment update", message);
         loadAppointments();
     });
     state.socket.on("disconnect", () => {
@@ -98,6 +105,24 @@ async function verifyOTP() {
     const email = $("#email").value.trim().toLowerCase();
     const otp = $("#otp").value.trim();
     if (!otp || otp.length !== 6) { $("#auth-message").textContent = "Enter 6-digit OTP."; return; }
+    const isNewUser = !$("#phone").hidden;
+    const name = $("#name").value.trim();
+    const phoneInput = $("#phone").value.trim();
+    const phoneDigits = phoneInput.replace(/\D/g, "");
+    const validPhone = phoneDigits.length === 10
+        || (phoneDigits.length === 11 && phoneDigits.startsWith("0"))
+        || (phoneDigits.length === 12 && phoneDigits.startsWith("91"))
+        || (phoneInput.startsWith("+") && phoneDigits.length >= 8 && phoneDigits.length <= 15);
+    if (isNewUser && name.length < 2) {
+        $("#auth-message").textContent = "Account बनाने के लिए अपना पूरा नाम भरें। आपका OTP सुरक्षित है।";
+        $("#name").focus();
+        return;
+    }
+    if (isNewUser && !validPhone) {
+        $("#auth-message").textContent = "Account बनाने के लिए 10-digit mobile number भरें (जैसे 9876543210)। आपका OTP सुरक्षित है।";
+        $("#phone").focus();
+        return;
+    }
 
     try {
         const data = await api("/api/auth/otp/verify", {
@@ -106,8 +131,8 @@ async function verifyOTP() {
                 contact: email,
                 otp,
                 type: "login",
-                name: $("#name").value.trim(),
-                phone: $("#phone").value.trim()
+                name,
+                phone: phoneInput
             })
         });
         finishLogin(data);
@@ -188,7 +213,7 @@ async function loadDoctors() {
     } catch (e) { $("#doctors").innerHTML = `<div class="error-box">${e.message}</div>`; }
 }
 async function trackingCard(x) {
-    if (!state.token || ["completed", "cancelled", "no_show"].includes(x.status)) return "";
+    if (!state.token || !Number.isInteger(x.tokenNumber) || ["completed", "cancelled", "no_show"].includes(x.status)) return "";
     try { const t = await api(`/api/tokens/${x._id}/tracking`); return `<div class="tracking"><strong>Live token स्थिति</strong><p><b>आपका नंबर:</b> #${t.token}<br><b>अभी चल रहा नंबर:</b> #${t.currentRunningToken || "—"} · <b>${t.patientsAhead}</b> patient(s) आगे<br><b>अनुमानित समय:</b> लगभग ${t.estimatedWaitMinutes} मिनट बाद · scheduled time ${t.appointmentTime || "clinic timing"}</p><button class="secondary refresh-tracking" data-id="${x._id}">अभी स्थिति देखें</button></div>`; } catch { return "<p>Tracking temporarily unavailable.</p>"; }
 }
 async function loadSupportQuestions() {
@@ -286,23 +311,39 @@ window.clearImagePreview = clearImagePreview;
 async function loadAppointments() {
     if (!state.token) { $("#appointments").innerHTML = "<p>Login के बाद आपके tokens दिखेंगे।</p>"; return; }
     try {
-        const items = await api("/api/tokens/my"); const groups = ["booked", "confirmed", "in_progress", "completed", "cancelled", "no_show"];
+        const items = await api("/api/tokens/my"); const groups = ["awaiting_payment", "booked", "confirmed", "in_progress", "completed", "cancelled", "no_show"];
+        const groupedItems = new Map();
+        for (const item of items) {
+            const key = item.paymentGroupId || item._id;
+            if (!groupedItems.has(key)) groupedItems.set(key, { ...item, groupAppointments: [] });
+            groupedItems.get(key).groupAppointments.push(item);
+        }
+        const displayItems = [...groupedItems.values()];
         const html = [];
         for (const status of groups) {
-            const rows = items.filter((x) => x.status === status);
+            const rows = displayItems.filter((x) => x.status === status);
             if (!rows.length) continue;
             html.push(`<h3>${status.replace("_", " ")}</h3>`);
             for (const appointment of rows) {
+                const members = appointment.groupAppointments;
                 const paymentStatus = appointment.paymentStatus || "unknown";
                 const paymentText = {
                     pending: "UPI payment pending",
-                    submitted: "Payment reference team verification में है",
+                    submitted: "Payment reference verification में है; token approval के बाद मिलेगा",
                     confirmed: "Payment verified",
                     failed: "Payment verify नहीं हुआ",
                     demo_paid: "पुराना demo payment"
                 }[paymentStatus] || paymentStatus;
+                const patientTokens = members.map((member) => {
+                    const token = Number.isInteger(member.tokenNumber)
+                        ? `Token ${escapeHtml(member.tokenId || member.tokenNumber)} · ${escapeHtml(member.appointmentTime || "")}`
+                        : paymentStatus === "failed"
+                            ? "token issue नहीं हुआ"
+                            : "payment approval के बाद token मिलेगा";
+                    return `${escapeHtml(member.patientName)} (उम्र ${escapeHtml(member.patientAge || "—")}): ${token}`;
+                }).join("<br>");
                 const paymentForm = paymentStatus === "pending"
-                    ? `<form class="payment-reference-form" data-appointment="${appointment._id}">
+                    ? `<form class="payment-reference-form" data-appointment="${members[0]._id}">
                         <label>UPI transaction reference<input name="reference" maxlength="80" minlength="8" pattern="[A-Za-z0-9-]{8,80}" required placeholder="UPI app का transaction ID"></label>
                         <button type="submit">Payment reference भेजें</button>
                     </form>`
@@ -313,7 +354,15 @@ async function loadAppointments() {
                         <p>या QR scan करके payment करें:</p>
                         <img class="upi-qr" src="${appointment.payment.qrDataUrl}" alt="UPI payment QR code">`
                     : "";
-                html.push(`<article class="appointment"><strong>${appointment.appointmentId || "Appointment"} · Token ${appointment.tokenId}</strong><p>${appointment.doctor.name} · ${appointment.doctor.clinic} · ${appointment.visitDate} · ${appointment.appointmentTime || ""}<br>Payment: ₹${appointment.paymentAmount ?? appointment.doctor.fee ?? 0} · ${paymentText}<br>Status: ${appointment.status}</p>${paymentDetails}${paymentForm}${await trackingCard(appointment)}</article>`);
+                const paymentNote = appointment.status === "awaiting_payment"
+                    ? `<p class="payment-note">${paymentStatus === "pending"
+                        ? "30 मिनट में payment करके reference भेजें। Admin verification के बाद ही token issue होगा।"
+                        : "Payment reference भेज दिया गया है। Admin verification के बाद सभी tokens issue होंगे।"}</p>`
+                    : "";
+                const patientSummary = members.length > 1
+                    ? `<p><b>मरीज और tokens:</b><br>${patientTokens}</p>`
+                    : `<p><b>${patientTokens}</b></p>`;
+                html.push(`<article class="appointment"><strong>${appointment.paymentGroupId || appointment.appointmentId || "Appointment"} · ${members.length} मरीज</strong><p>${escapeHtml(appointment.doctor.name)} · ${escapeHtml(appointment.doctor.clinic)} · ${escapeHtml(appointment.visitDate)}</p>${patientSummary}<p>Payment: ₹${appointment.payment?.amount ?? appointment.paymentAmount ?? appointment.doctor.fee ?? 0} · ${paymentText}<br>Status: ${appointment.status === "awaiting_payment" ? "Payment verification pending" : appointment.status}</p>${paymentDetails}${paymentNote}${paymentForm}${members.length === 1 ? await trackingCard(appointment) : ""}</article>`);
             }
         }
         $("#appointments").innerHTML = html.join("") || "<p>अभी कोई appointment नहीं है।";
@@ -350,13 +399,121 @@ async function loadFeedback() {
         $("#feedback-appointments").textContent = error.message;
     }
 }
+function updateBookingPatientSummary(fee, availableCount) {
+    const entries = [...document.querySelectorAll(".patient-entry")];
+    const addButton = $("#add-booking-patient");
+    if (addButton) addButton.disabled = entries.length >= availableCount;
+    const doctorFee = Number(fee || 0);
+    const perPatientTotal = Math.round((doctorFee + platformFeePerToken) * 100) / 100;
+    const platformFeeTotal = entries.length * platformFeePerToken;
+    const doctorFeeTotal = entries.length * doctorFee;
+    const total = Math.round((doctorFeeTotal + platformFeeTotal) * 100) / 100;
+    const summary = $("#booking-total");
+    if (summary) {
+        summary.textContent = `${entries.length} मरीज × ₹${perPatientTotal.toFixed(2)} (doctor fee ₹${doctorFee.toFixed(2)} + platform fee ₹${platformFeePerToken.toFixed(2)} प्रति मरीज) = कुल ₹${total.toFixed(2)}. ${availableCount} token उपलब्ध हैं।`;
+    }
+    const submitButton = document.querySelector(".booking-form button[type='submit'], .booking-form button:not([type])");
+    if (submitButton) submitButton.disabled = availableCount < entries.length;
+    entries.forEach((entry) => {
+        const removeButton = entry.querySelector(".remove-booking-patient");
+        if (removeButton) removeButton.disabled = entries.length === 1;
+    });
+}
 async function showDoctorDetails(id) {
     const doctor = state.doctors.find((x) => x._id === id); if (!doctor) return;
     try {
-        const status = await api(`/api/doctors/${id}/status`); $("#doctors").closest(".card").hidden = true; $("#doctor-details").hidden = false;
-        $("#details-content").innerHTML = `<h2>${escapeHtml(doctor.name)}</h2><p class="detail-specialty">${escapeHtml(doctor.specialty)} · ${escapeHtml(doctor.clinic)} · ${escapeHtml(doctor.district)}</p><p class="doctor-rating">${status.averageRating ? `★ ${status.averageRating} / 5` : "अभी कोई rating नहीं"} · ${status.ratingCount} patient feedback</p><div class="info-grid"><div><strong>Fee</strong><b>₹${doctor.fee}</b></div><div><strong>Total / Booked / Available</strong><b id="availability-summary">${status.total} / ${status.booked} / ${status.available}</b></div><div><strong>Current token</strong><b id="current-token">#${status.currentToken || "—"}</b></div><div><strong>Days and timing</strong><b>${doctor.availableDays.join(", ")} · ${doctor.openingTime}-${doctor.closingTime}</b></div></div><form class="booking-form" data-doctor="${id}"><label>Patient Name<input id="patient-name" type="text" placeholder="Patient Name" required></label><label>Age<input id="patient-age" type="number" placeholder="Age" min="1" max="120" required></label><label>Date<input id="visit-date" type="date" required></label><label>Token<select id="preferred-token">${status.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("")}</select></label><p>Payment: ₹${doctor.fee} by UPI. Payment team verify करेगी; कोई payment gateway fee नहीं।</p><button>Token book करें और UPI से pay करें</button></form><p class="payment-note">UPI payment सीधे configured account में होगा। Payment verify होने तक booking payment pending दिखाएगी।</p><p id="booking-message" class="message"></p><div id="booking-confirmation" class="booking-confirmation" hidden></div>`;
-        $("#visit-date").min = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-        $("#visit-date").addEventListener("change", async (event) => { try { const next = await api(`/api/doctors/${id}/status?date=${event.target.value}`); $("#availability-summary").textContent = `${next.total} / ${next.booked} / ${next.available}`; $("#current-token").textContent = `#${next.currentToken || "—"}`; $("#preferred-token").innerHTML = next.availableTokens.length ? next.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("") : "<option value=''>No token available</option>"; } catch (error) { $("#booking-message").textContent = error.message; } });
+        const todayIndia = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+        const status = await api(`/api/doctors/${id}/status?date=${encodeURIComponent(todayIndia)}`); $("#doctors").closest(".card").hidden = true; $("#doctor-details").hidden = false;
+        $("#details-content").innerHTML = `
+            <h2>${escapeHtml(doctor.name)}</h2>
+            <p class="detail-specialty">${escapeHtml(doctor.specialty)} · ${escapeHtml(doctor.clinic)} · ${escapeHtml(doctor.district)}</p>
+            <p class="doctor-rating">${status.averageRating ? `★ ${status.averageRating} / 5` : "अभी कोई rating नहीं"} · ${status.ratingCount} patient feedback</p>
+            <div class="info-grid">
+                <div><strong>Doctor fee per token</strong><b>₹${doctor.fee}</b></div>
+                <div><strong>Platform fee per patient</strong><b>₹${platformFeePerToken.toFixed(2)}</b></div>
+                <div><strong>Total / Booked / Available</strong><b id="availability-summary">${status.total} / ${status.booked} / ${status.available}</b></div>
+                <div><strong>Current token</strong><b id="current-token">#${status.currentToken || "—"}</b></div>
+                <div><strong>Days and timing</strong><b>${doctor.availableDays.join(", ")} · ${doctor.openingTime}-${doctor.closingTime}</b></div>
+            </div>
+            <form class="booking-form" data-doctor="${id}">
+                <div id="booking-patients">
+                    <div id="booking-patient-list">
+                        <div class="patient-entry grid">
+                            <label>मरीज 1 का नाम<input name="patient-name" type="text" maxlength="100" placeholder="पूरा नाम" required></label>
+                            <label>उम्र<input name="patient-age" type="number" min="1" max="120" placeholder="उम्र" required></label>
+                            <button type="button" class="secondary remove-booking-patient" aria-label="मरीज हटाएँ">हटाएँ</button>
+                        </div>
+                    </div>
+                    <button id="add-booking-patient" class="secondary" type="button">+ एक और मरीज जोड़ें</button>
+                </div>
+                <p id="booking-total"></p>
+                <label>Date<input id="visit-date" type="date" required></label>
+                <label>पहले मरीज का token<select id="preferred-token">${status.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("")}</select></label>
+                <p>हर मरीज को एक अलग token मिलेगा। ₹1.89 platform fee हर मरीज के token पर जुड़ेगी; admin verification के बाद tokens issue होंगे।</p>
+                <button>Tokens book करें और UPI से pay करें</button>
+            </form>
+            <p class="payment-note">आप एक login से परिवार के कई मरीजों के अलग-अलग नाम और उम्र भर सकते हैं।</p>
+            <p id="booking-message" class="message"></p>
+            <div id="booking-confirmation" class="booking-confirmation" hidden></div>`;
+        let availableCount = status.availableTokens.length;
+        let availabilityRequest = 0;
+        updateBookingPatientSummary(doctor.fee, availableCount);
+        $("#visit-date").min = todayIndia;
+        $("#visit-date").value = todayIndia;
+        $("#booking-patient-list").addEventListener("click", (event) => {
+            if (event.target.closest(".remove-booking-patient")) {
+                event.target.closest(".patient-entry").remove();
+                [...$("#booking-patient-list").querySelectorAll(".patient-entry")].forEach((entry, index) => {
+                    entry.querySelector("label").firstChild.textContent = `मरीज ${index + 1} का नाम`;
+                });
+                updateBookingPatientSummary(doctor.fee, availableCount);
+            }
+        });
+        $("#add-booking-patient").addEventListener("click", () => {
+            const entries = $("#booking-patient-list").querySelectorAll(".patient-entry");
+            if (entries.length >= availableCount) return;
+            const index = entries.length + 1;
+            $("#booking-patient-list").insertAdjacentHTML("beforeend", `
+                <div class="patient-entry grid">
+                    <label>मरीज ${index} का नाम<input name="patient-name" type="text" maxlength="100" placeholder="पूरा नाम" required></label>
+                    <label>उम्र<input name="patient-age" type="number" min="1" max="120" placeholder="उम्र" required></label>
+                    <button type="button" class="secondary remove-booking-patient" aria-label="मरीज हटाएँ">हटाएँ</button>
+                </div>`);
+            updateBookingPatientSummary(doctor.fee, availableCount);
+        });
+        $("#visit-date").addEventListener("change", async (event) => {
+            const selectedDate = event.target.value;
+            const requestId = ++availabilityRequest;
+            const tokenSelect = $("#preferred-token");
+            const bookingButton = document.querySelector(".booking-form button[type='submit'], .booking-form button:not([type])");
+            availableCount = 0;
+            tokenSelect.disabled = true;
+            tokenSelect.innerHTML = "<option value=''>इस तारीख के tokens लोड हो रहे हैं...</option>";
+            $("#availability-summary").textContent = `${doctor.tokenLimit} / लोड हो रहा है / लोड हो रहा है`;
+            $("#current-token").textContent = "#—";
+            if (bookingButton) bookingButton.disabled = true;
+            updateBookingPatientSummary(doctor.fee, availableCount);
+            try {
+                if (!selectedDate) throw new Error("कृपया appointment की तारीख चुनें।");
+                const next = await api(`/api/doctors/${id}/status?date=${encodeURIComponent(selectedDate)}`);
+                if (requestId !== availabilityRequest || $("#visit-date").value !== selectedDate) return;
+                availableCount = next.availableTokens.length;
+                $("#availability-summary").textContent = `${next.total} / ${next.booked} / ${next.available}`;
+                $("#current-token").textContent = `#${next.currentToken || "—"}`;
+                tokenSelect.innerHTML = next.availableTokens.length
+                    ? next.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("")
+                    : `<option value="">इस तारीख (${escapeHtml(selectedDate)}) को token उपलब्ध नहीं</option>`;
+                tokenSelect.disabled = !next.availableTokens.length;
+                updateBookingPatientSummary(doctor.fee, availableCount);
+            } catch (error) {
+                if (requestId !== availabilityRequest) return;
+                tokenSelect.innerHTML = "<option value=''>इस तारीख के tokens लोड नहीं हुए</option>";
+                tokenSelect.disabled = true;
+                $("#availability-summary").textContent = `${doctor.tokenLimit} / — / —`;
+                if (bookingButton) bookingButton.disabled = true;
+                $("#booking-message").textContent = error.message;
+            }
+        });
     } catch (e) { alert(e.message); }
 }
 $("#header-auth-button").addEventListener("click", () => { if (state.token) { $("#appointments").scrollIntoView({ behavior: "smooth" }); return; } $("#auth-panel").hidden = !$("#auth-panel").hidden; });
@@ -458,14 +615,17 @@ $("#doctor-details").addEventListener("submit", async (event) => {
         return;
     }
     try {
+        const patients = [...event.target.querySelectorAll(".patient-entry")].map((entry) => ({
+            name: entry.querySelector("[name='patient-name']").value.trim(),
+            age: Number(entry.querySelector("[name='patient-age']").value)
+        }));
         const data = await api("/api/tokens", {
             method: "POST",
             body: JSON.stringify({
                 doctorId: event.target.dataset.doctor,
                 visitDate: $("#visit-date").value,
                 preferredToken: $("#preferred-token").value,
-                patientName: $("#patient-name").value,
-                patientAge: $("#patient-age").value
+                patients
             })
         });
         const appointment = data.appointment;
@@ -478,16 +638,19 @@ $("#doctor-details").addEventListener("submit", async (event) => {
                     <label>UPI transaction reference<input name="reference" maxlength="80" minlength="8" pattern="[A-Za-z0-9-]{8,80}" required placeholder="UPI app से transaction ID"></label>
                     <button type="submit">Payment reference भेजें</button>
                 </form>
-                <p class="payment-note">Team UPI transaction verify करेगी। Verification से पहले status pending रहेगा।</p>`
+        <p class="payment-note">Payment का reference देने के बाद admin UPI transaction verify करेगा। Approval के बाद ही token issue होगा। 30 मिनट में reference न देने पर booking cancel हो जाएगी।</p>`
             : "<p>यह appointment free है; कोई payment जरूरी नहीं।</p>";
         $("#booking-message").textContent = data.message;
         $("#booking-confirmation").hidden = false;
-        $("#booking-confirmation").innerHTML = `<h3>Appointment booked ✓</h3>
+        const patientTokens = (data.tokens || []).map((item) =>
+            `${escapeHtml(item.patientName)}: ${item.token ? escapeHtml(item.token) : "payment verify hone ke baad token"}`
+        ).join("<br>");
+        $("#booking-confirmation").innerHTML = `<h3>${data.token ? "Appointment booked ✓" : "Payment verification pending"}</h3>
             <div class="booking-confirmation-grid">
-                <div><strong>Appointment ID</strong><b>${escapeHtml(appointment.appointmentId)}</b></div>
-                <div><strong>Token</strong><b>${escapeHtml(data.token)}</b></div>
+                <div><strong>Booking ID</strong><b>${escapeHtml(appointment.paymentGroupId || appointment.appointmentId)}</b></div>
+                <div><strong>Patients / tokens</strong><b>${patientTokens}</b></div>
                 <div><strong>Date</strong><b>${escapeHtml(appointment.visitDate)}</b></div>
-                <div><strong>Time</strong><b>${escapeHtml(appointment.appointmentTime || "Clinic timing")}</b></div>
+                <div><strong>Total payment (doctor fee + platform fee)</strong><b>₹${Number(data.payment.amount).toFixed(2)}</b></div>
                 <div><strong>Payment status</strong><b>${escapeHtml(appointment.paymentStatus)}</b></div>
             </div>${paymentMarkup}`;
         loadAppointments();
