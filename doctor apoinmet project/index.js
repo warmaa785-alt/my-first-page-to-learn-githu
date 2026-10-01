@@ -3,6 +3,7 @@ require("dotenv").config();
 const path = require("path");
 const crypto = require("crypto");
 const dns = require("node:dns");
+const net = require("node:net");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -17,6 +18,33 @@ const { getAuth } = require("firebase-admin/auth");
 const QRCode = require("qrcode");
 
 if (process.env.SMTP_HOST) dns.setDefaultResultOrder("ipv4first");
+
+function connectSmtpOverIPv4(options, callback) {
+    const socket = net.connect({
+        host: options.host,
+        port: options.port,
+        family: 4
+    });
+    let settled = false;
+    const fail = (error) => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        callback(error);
+    };
+
+    socket.setTimeout(options.connectionTimeout || 10000, () => {
+        fail(new Error("SMTP IPv4 connection timed out"));
+    });
+    socket.once("error", fail);
+    socket.once("connect", () => {
+        if (settled) return;
+        settled = true;
+        socket.setTimeout(0);
+        socket.removeListener("error", fail);
+        callback(null, { connection: socket });
+    });
+}
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -34,6 +62,7 @@ const emailTransporter = (process.env.SMTP_HOST && process.env.SMTP_USER && proc
         port: smtpPort,
         secure: smtpPort === 465,
         auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        getSocket: connectSmtpOverIPv4,
         connectionTimeout: 10000,
         greetingTimeout: 10000,
         socketTimeout: 20000
