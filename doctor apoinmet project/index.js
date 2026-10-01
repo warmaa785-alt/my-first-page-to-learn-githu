@@ -10,15 +10,67 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const multer = require("multer");
+const nodemailer = require("nodemailer");
+const { cert, getApp, getApps, initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 
-const upload = multer({ 
+const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    limits: { fileSize: 5 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
         if (file.mimetype.startsWith("image/")) cb(null, true);
         else cb(new Error("Only images allowed"), false);
     }
 });
+
+const smtpPort = Number(process.env.SMTP_PORT || 587);
+const emailTransporter = (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS)
+    ? nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: smtpPort,
+        secure: smtpPort === 465,
+        auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS },
+        connectionTimeout: 10000,
+        greetingTimeout: 10000,
+        socketTimeout: 20000
+    })
+    : null;
+
+const otpStore = new Map();
+function generateOTP() { return String(crypto.randomInt(100000, 1000000)); }
+async function sendOTPEmail(email, otp, type) {
+    if (!emailTransporter) return { success: false, reason: "Email not configured" };
+    const subjects = { login: "Sehat Bhabua - Login OTP", appointment: "Sehat Bhabua - Appointment Confirmation OTP" };
+    const messages = {
+        login: `आपका Login OTP: ${otp}\nयह 10 मिनट के लिए वैध है। किसी से शेयर न करें।`,
+        appointment: `आपका Appointment Confirmation OTP: ${otp}\nयह 10 मिनट के लिए वैध है।`
+    };
+    try {
+        await emailTransporter.sendMail({
+            from: `"Sehat Bhabua" <${process.env.SMTP_USER}>`,
+            to: email,
+            subject: subjects[type] || subjects.login,
+            text: messages[type] || messages.login
+        });
+        return { success: true };
+    } catch (e) {
+        console.error("Email send failed:", e.message);
+        return { success: false, reason: e.message };
+    }
+}
+async function parseGroqResponse(response) {
+    let data;
+    try {
+        data = await response.json();
+    } catch {
+        throw new Error(`Groq returned an invalid response (HTTP ${response.status}).`);
+    }
+    if (!response.ok) {
+        const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
+        throw new Error(String(detail).replace(/[\r\n]/g, " ").slice(0, 240));
+    }
+    return data;
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -27,18 +79,62 @@ const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 const JWT_SECRET = process.env.JWT_SECRET;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
+const GROQ_MODEL = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+const validTwilioSender = /^\+[1-9]\d{7,14}$/.test(TWILIO_PHONE_NUMBER || "");
 let twilioClient = null;
-if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_ACCOUNT_SID.startsWith("AC")) {
-    try {
-        twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-    } catch (e) {
-        console.warn("Twilio init failed:", e.message);
+if (TWILIO_ACCOUNT_SID || TWILIO_AUTH_TOKEN || TWILIO_PHONE_NUMBER) {
+    if (TWILIO_ACCOUNT_SID?.startsWith("AC") && TWILIO_AUTH_TOKEN && validTwilioSender) {
+        try {
+            twilioClient = require("twilio")(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+        } catch (e) {
+            console.warn("Twilio init failed:", e.message);
+        }
+    } else {
+        console.warn("Twilio OTP is disabled because the account SID, auth token or E.164 sender number is invalid.");
     }
 }
+let firebaseAuth = null;
+let firebaseApp = null;
+try {
+    let serviceAccount = null;
+    if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+        const account = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+        const privateKey = account.privateKey || account.private_key;
+        serviceAccount = {
+            projectId: account.projectId || account.project_id,
+            clientEmail: account.clientEmail || account.client_email,
+            privateKey: privateKey?.replace(/\\n/g, "\n")
+        };
+    } else {
+        const { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY } = process.env;
+        if (FIREBASE_PROJECT_ID || FIREBASE_CLIENT_EMAIL || FIREBASE_PRIVATE_KEY) {
+            if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
+                serviceAccount = {
+                    projectId: FIREBASE_PROJECT_ID,
+                    clientEmail: FIREBASE_CLIENT_EMAIL,
+                    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
+                };
+            } else {
+                console.warn("Firebase Admin credentials are incomplete; Firebase Phone Auth is disabled.");
+            }
+        }
+    }
+    if (serviceAccount) {
+        firebaseApp = getApps().length
+            ? getApp()
+            : initializeApp({ credential: cert(serviceAccount) });
+        firebaseAuth = getAuth(firebaseApp);
+        console.log("Firebase Admin Phone Auth verification is enabled.");
+    } else {
+        console.log("Firebase Admin credentials are not configured; SMS OTP will use the configured provider.");
+    }
+} catch (error) {
+    console.error("Firebase Admin initialization failed; Firebase Phone Auth is disabled:", error.message);
+}
+
 if (!MONGODB_URI || !JWT_SECRET) throw new Error("MONGODB_URI and JWT_SECRET are required in a .env file.");
 
 app.use(cors());
@@ -73,8 +169,11 @@ const districtCities = {
 };
 
 const userSchema = new mongoose.Schema({
-    name: { type: String, required: true, trim: true }, phone: { type: String, required: true, unique: true, trim: true },
-    passwordHash: { type: String, required: true }, role: { type: String, enum: ["patient", "doctor", "admin"], default: "patient" },
+    name: { type: String, required: true, trim: true },
+    phone: { type: String, required: true, unique: true, trim: true },
+    email: { type: String, unique: true, sparse: true, trim: true, lowercase: true },
+    passwordHash: { type: String, required: true },
+    role: { type: String, enum: ["patient", "doctor", "admin"], default: "patient" },
     location: { consent: { type: Boolean, default: false }, latitude: Number, longitude: Number, capturedAt: Date }
 }, { timestamps: true });
 const doctorSchema = new mongoose.Schema({
@@ -88,7 +187,7 @@ const doctorSchema = new mongoose.Schema({
 }, { timestamps: true });
 const tokenSchema = new mongoose.Schema({
     doctor: { type: mongoose.Schema.Types.ObjectId, ref: "Doctor", required: true }, patient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    patientName: { type: String, required: true }, patientPhone: { type: String, required: true, index: true },
+    patientName: { type: String, required: true }, patientAge: { type: Number, min: 1, max: 120 }, patientPhone: { type: String, required: true, index: true },
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: "Doctor", required: true }, state: { type: String, required: true }, district: { type: String, required: true }, city: { type: String, required: true }, clinic: { type: String, required: true },
     tokenNumber: { type: Number, required: true }, visitDate: { type: String, required: true }, appointmentId: { type: String, unique: true, index: true },
     appointmentTime: String, bookedAtIndia: String,
@@ -142,29 +241,182 @@ function tokenId(name, n) { const first = (name || "TOKEN").trim().split(/\s+/)[
 function appointmentTime(doctor, n) { const [h, m] = (doctor.openingTime || "09:00").split(":").map(Number); const d = new Date(2000, 0, 1, h, m + (n - 1) * doctor.averageMinutes); return d.toTimeString().slice(0, 5); }
 function indiaDateTime(date = new Date()) { return new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "medium", timeZone: "Asia/Kolkata" }).format(date); }
 function validDate(value) { return /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= today(); }
+function normalizePhone(value) {
+    const input = String(value || "").trim();
+    const digits = input.replace(/\D/g, "");
+    if (digits.length === 10) return `+91${digits}`;
+    if (digits.length === 11 && digits.startsWith("0")) return `+91${digits.slice(1)}`;
+    if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+    if (input.startsWith("+") && digits.length >= 8 && digits.length <= 15) return `+${digits}`;
+    return null;
+}
+function phoneLookupValues(phone) {
+    const values = [phone, phone.slice(1)];
+    if (phone.startsWith("+91")) values.push(phone.slice(3));
+    return [...new Set(values)];
+}
+function findUserByPhone(phone) {
+    return User.findOne({ phone: { $in: phoneLookupValues(phone) } });
+}
 
 app.post("/api/auth/register", async (req, res) => {
-    try { const { name, phone, password } = req.body; if (!name || !phone || !password || password.length < 6) return res.status(400).json({ message: "Name, phone and a password of 6+ characters are required." });
-        const user = await User.create({ name, phone, passwordHash: await bcrypt.hash(password, 12) }); res.status(201).json({ token: signUser(user), user: { name: user.name, phone: user.phone, role: user.role } });
-    } catch (e) { res.status(e.code === 11000 ? 409 : 500).json({ message: e.code === 11000 ? "This phone number is already registered." : "Registration failed." }); }
+    try { const { name, phone, email, password } = req.body; if (!name || !phone || !password || password.length < 6) return res.status(400).json({ message: "Name, phone and a password of 6+ characters are required." });
+        const user = await User.create({ name, phone, email: email?.toLowerCase(), passwordHash: await bcrypt.hash(password, 12) }); res.status(201).json({ token: signUser(user), user: { name: user.name, phone: user.phone, email: user.email, role: user.role } });
+    } catch (e) { res.status(e.code === 11000 ? 409 : 500).json({ message: e.code === 11000 ? "This phone number or email is already registered." : "Registration failed." }); }
 });
-app.post("/api/auth/login", async (req, res) => { const user = await User.findOne({ phone: req.body.phone }); if (!user || !(await bcrypt.compare(req.body.password || "", user.passwordHash))) return res.status(401).json({ message: "Invalid phone number or password." }); res.json({ token: signUser(user), user: { name: user.name, phone: user.phone, role: user.role } }); });
-app.get("/api/auth/me", auth(), async (req, res) => { const user = await User.findById(req.user.id).select("name phone role location"); if (!user) return res.status(404).json({ message: "Patient account not found." }); res.json({ user }); });
+app.post("/api/auth/login", async (req, res) => { const user = await User.findOne({ phone: req.body.phone }); if (!user || !(await bcrypt.compare(req.body.password || "", user.passwordHash))) return res.status(401).json({ message: "Invalid phone number or password." }); res.json({ token: signUser(user), user: { name: user.name, phone: user.phone, email: user.email, role: user.role } }); });
+app.get("/api/auth/me", auth(), async (req, res) => { const user = await User.findById(req.user.id).select("name phone email role location"); if (!user) return res.status(404).json({ message: "Patient account not found." }); res.json({ user }); });
 app.post("/api/auth/forgot-password/request", async (req, res) => {
-    const phone = String(req.body.phone || "").trim(); if (!phone) return res.status(400).json({ message: "Phone number is required." });
-    const previous = resetRequests.get(phone); if (previous && previous.lastRequest > Date.now() - 60 * 1000) return res.status(429).json({ message: "Please wait a minute before requesting another OTP." });
-    const user = await User.findOne({ phone }); const generic = { message: "If this phone is registered, a demo OTP has been generated." };
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return res.status(400).json({ message: "Enter a valid email address." });
+    const previous = resetRequests.get(email);
+    if (previous && previous.lastRequest > Date.now() - 60 * 1000) return res.status(429).json({ message: "Please wait a minute before requesting another OTP." });
+    const user = await User.findOne({ email, role: "patient" });
+    const generic = { message: "If this email is registered, a reset OTP has been sent." };
     if (!user) return res.json(generic);
-    const otp = String(crypto.randomInt(100000, 1000000)); resetRequests.set(phone, { hash: await bcrypt.hash(otp, 10), expires: Date.now() + 10 * 60 * 1000, attempts: 0, lastRequest: Date.now() });
-    console.log(`[DEMO OTP] password reset for ${phone}: ${otp} (expires in 10 minutes)`);
-    res.json({ ...generic, demoOnly: true, demoOtp: process.env.NODE_ENV === "production" ? undefined : otp, expiresInSeconds: 600 });
+    const otp = generateOTP();
+    resetRequests.set(email, { hash: await bcrypt.hash(otp, 10), expires: Date.now() + 10 * 60 * 1000, attempts: 0, lastRequest: Date.now() });
+    const delivery = await sendOTPEmail(email, otp, "login");
+    if (!delivery.success) {
+        resetRequests.delete(email);
+        console.error("Password reset email could not be sent:", delivery.reason);
+        return res.status(503).json({ message: "ईमेल OTP नहीं भेजा जा सका। Gmail SMTP settings की जाँच करें।" });
+    }
+    res.json({ ...generic, message: "If this email is registered, a reset OTP has been sent.", expiresInSeconds: 600 });
 });
 app.post("/api/auth/forgot-password/verify", async (req, res) => {
-    const phone = String(req.body.phone || "").trim(); const otp = String(req.body.otp || "").trim(); const password = String(req.body.newPassword || "");
-    const request = resetRequests.get(phone); if (!request || request.expires < Date.now() || request.attempts >= 5) return res.status(400).json({ message: "OTP expired or unavailable. Request a new OTP." });
-    request.attempts += 1; if (!/^\d{6}$/.test(otp) || password.length < 6 || !(await bcrypt.compare(otp, request.hash))) return res.status(400).json({ message: "Invalid OTP or password must be 6+ characters." });
-    const user = await User.findOne({ phone }); if (!user) return res.status(400).json({ message: "OTP expired or unavailable. Request a new OTP." });
-    user.passwordHash = await bcrypt.hash(password, 12); await user.save(); resetRequests.delete(phone); res.json({ message: "Password updated. You can now log in." });
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const otp = String(req.body.otp || "").trim();
+    const password = String(req.body.newPassword || "");
+    const request = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? resetRequests.get(email) : null;
+    if (!request || request.expires < Date.now() || request.attempts >= 5) return res.status(400).json({ message: "OTP expired or unavailable. Request a new OTP." });
+    request.attempts += 1;
+    if (!/^\d{6}$/.test(otp) || password.length < 6 || !(await bcrypt.compare(otp, request.hash))) return res.status(400).json({ message: "Invalid OTP or password must be 6+ characters." });
+    const user = await User.findOne({ email, role: "patient" });
+    if (!user) return res.status(400).json({ message: "OTP expired or unavailable. Request a new OTP." });
+    user.passwordHash = await bcrypt.hash(password, 12); await user.save(); resetRequests.delete(email); res.json({ message: "Password updated. You can now log in." });
+});
+
+app.post("/api/auth/otp/send", async (req, res) => {
+    const type = String(req.body.type || "login");
+    if (type !== "login") return res.status(400).json({ message: "Invalid OTP purpose." });
+    const rawContact = String(req.body.contact || "").trim();
+    const contact = rawContact.toLowerCase();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) || contact.length > 254) {
+        return res.status(400).json({ message: "Enter a valid email address for OTP." });
+    }
+    const user = await User.findOne({ email: contact });
+    if (user && user.role !== "patient") return res.status(403).json({ message: "Use the doctor or team login for this account." });
+    const key = `${type}:${contact}`;
+    const prev = otpStore.get(key);
+    if (prev && prev.lastRequest > Date.now() - 60 * 1000) return res.status(429).json({ message: "Please wait 1 minute before requesting another OTP." });
+    const otp = generateOTP();
+    otpStore.set(key, {
+        otp,
+        expires: Date.now() + 10 * 60 * 1000,
+        attempts: 0,
+        lastRequest: Date.now(),
+        userId: user?._id.toString() || null,
+        isNewUser: !user
+    });
+    const delivery = await sendOTPEmail(contact, otp, "login");
+    if (!delivery.success) {
+        otpStore.delete(key);
+        console.error("Email OTP delivery is unavailable:", delivery.reason);
+        return res.status(503).json({ message: "ईमेल OTP नहीं भेजा जा सका। SMTP_HOST, SMTP_PORT, SMTP_USER और Gmail App Password की जाँच करें।" });
+    }
+    return res.json({ message: "OTP आपके email पर भेज दिया गया है।", via: "email", isNewUser: !user });
+});
+
+app.post("/api/auth/otp/verify", async (req, res) => {
+    const type = String(req.body.type || "login");
+    const contact = String(req.body.contact || "").trim().toLowerCase();
+    const otp = String(req.body.otp || "").trim();
+    const name = String(req.body.name || "").trim();
+    if (type !== "login") return res.status(400).json({ message: "Invalid OTP purpose." });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contact) || contact.length > 254 || !/^\d{6}$/.test(otp)) {
+        return res.status(400).json({ message: "Enter a valid email address and six-digit OTP." });
+    }
+    const key = `${type}:${contact}`;
+    const record = otpStore.get(key);
+    if (!record || record.expires < Date.now() || record.attempts >= 5) return res.status(400).json({ message: "OTP expired or unavailable. Request a new OTP." });
+    record.attempts += 1;
+    if (record.otp !== otp) return res.status(400).json({ message: "Invalid OTP." });
+
+    let user = record.userId ? await User.findById(record.userId) : null;
+    if (!user && record.isNewUser) {
+        const phone = normalizePhone(req.body.phone);
+        if (!phone) return res.status(400).json({ message: "Enter a valid mobile number for clinic contact." });
+        if (name.length < 2) return res.status(400).json({ message: "Name is required for new users." });
+        try {
+            user = await User.create({
+                name,
+                phone,
+                email: contact,
+                passwordHash: await bcrypt.hash(crypto.randomBytes(16).toString("hex"), 12)
+            });
+        } catch (error) {
+            if (error.code === 11000) return res.status(409).json({ message: "यह mobile number या email पहले से registered है। सही contact number डालें या अपने account में login करें।" });
+            throw error;
+        }
+    }
+
+    if (!user) return res.status(404).json({ message: "User not found." });
+    if (user.role !== "patient") return res.status(403).json({ message: "Use the doctor or team login for this account." });
+    otpStore.delete(key);
+    res.json({ token: signUser(user), user: { id: user._id.toString(), name: user.name, phone: user.phone, email: user.email, role: user.role } });
+});
+
+// Firebase Phone Auth - Send OTP
+app.post("/api/auth/firebase/send-otp", async (req, res) => {
+    res.status(410).json({ message: "Use the Firebase client Phone Auth SDK to send phone verification codes." });
+});
+
+// Firebase Phone Auth - Verify OTP (legacy - backend OTP)
+app.post("/api/auth/firebase/verify-otp", async (req, res) => {
+    res.status(410).json({ message: "Send and verify Firebase phone codes with the Firebase client Phone Auth SDK." });
+});
+
+// Firebase Client SDK - Verify ID Token (frontend sends ID token after phone auth)
+app.post("/api/auth/firebase/verify-id-token", async (req, res) => {
+    if (!firebaseAuth) return res.status(503).json({ message: "Firebase server verification is not configured. Use SMS OTP delivery or configure Firebase Admin credentials." });
+    const { idToken, phone, name } = req.body;
+    if (!idToken) return res.status(400).json({ message: "ID token required." });
+    try {
+        const decodedToken = await firebaseAuth.verifyIdToken(idToken);
+        const firebasePhone = normalizePhone(decodedToken.phone_number);
+        const normalizedPhone = normalizePhone(phone);
+        if (!firebasePhone) return res.status(400).json({ message: "Verified Firebase account has no valid phone number." });
+        if (normalizedPhone && normalizedPhone !== firebasePhone) {
+            return res.status(400).json({ message: "Phone number mismatch." });
+        }
+        let user = await findUserByPhone(firebasePhone);
+        if (!user) {
+            const patientName = String(name || "").trim();
+            if (patientName.length < 2) return res.status(400).json({ message: "Name is required for new users." });
+            user = await User.create({ name: patientName, phone: firebasePhone, passwordHash: await bcrypt.hash(crypto.randomBytes(16).toString("hex"), 12) });
+        }
+        if (user.role !== "patient") return res.status(403).json({ message: "Use the doctor or team login for this account." });
+        res.json({ token: signUser(user), user: { id: user._id.toString(), name: user.name, phone: user.phone, email: user.email, role: user.role } });
+    } catch (e) {
+        console.error("Firebase ID token verify failed:", e.message);
+        res.status(401).json({ message: "Firebase could not verify this sign-in. Check the OTP and Firebase project configuration." });
+    }
+});
+
+// Firebase web config for frontend
+app.get("/api/firebase-config", (req, res) => {
+    const projectId = process.env.FIREBASE_PROJECT_ID || "";
+    const config = {
+        enabled: Boolean(firebaseAuth && process.env.FIREBASE_API_KEY && projectId && process.env.FIREBASE_APP_ID),
+        apiKey: process.env.FIREBASE_API_KEY || "",
+        authDomain: process.env.FIREBASE_AUTH_DOMAIN || (projectId ? `${projectId}.firebaseapp.com` : ""),
+        projectId,
+        storageBucket: process.env.FIREBASE_STORAGE_BUCKET || (projectId ? `${projectId}.appspot.com` : ""),
+        messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID || "",
+        appId: process.env.FIREBASE_APP_ID || ""
+    };
+    res.json(config);
 });
 
 app.get("/api/locations", (req, res) => res.json({
@@ -175,7 +427,11 @@ app.get("/api/locations", (req, res) => res.json({
 }));
 app.get("/api/doctors", async (req, res) => {
     const filter = { active: true }; if (req.query.state) filter.state = req.query.state; if (req.query.district) filter.district = req.query.district; if (req.query.city) filter.city = req.query.city;
-    if (req.query.search) filter.$or = [{ name: new RegExp(req.query.search, "i") }, { specialty: new RegExp(req.query.search, "i") }, { clinic: new RegExp(req.query.search, "i") }];
+    const search = String(req.query.search || "").trim();
+    if (search) {
+        const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        filter.$or = [{ name: new RegExp(escapedSearch, "i") }, { specialty: new RegExp(escapedSearch, "i") }, { clinic: new RegExp(escapedSearch, "i") }];
+    }
     res.json(await Doctor.find(filter).sort({ district: 1, name: 1 }));
 });
 app.get("/api/doctors/:id/status", async (req, res) => {
@@ -189,7 +445,7 @@ app.get("/api/doctors/:id/status", async (req, res) => {
 
 app.post("/api/tokens", auth("patient"), async (req, res) => {
     try {
-        const { doctorId, visitDate, preferredToken, paymentMethod = "demo_cash" } = req.body; if (!doctorId || !validDate(visitDate)) return res.status(400).json({ message: "A valid doctor and today or future date are required." });
+        const { doctorId, visitDate, preferredToken, paymentMethod = "demo_cash", patientName, patientAge } = req.body; if (!doctorId || !validDate(visitDate)) return res.status(400).json({ message: "A valid doctor and today or future date are required." });
         if (!["demo_cash", "demo_upi", "demo_card"].includes(paymentMethod)) return res.status(400).json({ message: "Please choose a valid demo payment method." });
         const doctor = await Doctor.findOne({ _id: doctorId, active: true }); if (!doctor) return res.status(404).json({ message: "Doctor not found." });
         const day = new Date(`${visitDate}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }); if (doctor.availableDays?.length && !doctor.availableDays.includes(day)) return res.status(409).json({ message: `Doctor is not available on ${day}.` });
@@ -208,10 +464,12 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
             if (!counter) return res.status(409).json({ message: "All tokens for this date are booked." });
             number = counter.nextToken - 1;
         }
+        const finalPatientName = patientName || patient.name;
         const appointment = await Token.create({
             doctor: doctor._id,
             patient: req.user.id,
-            patientName: patient.name,
+            patientName: finalPatientName,
+            patientAge: patientAge ? Number(patientAge) : undefined,
             patientPhone: patient.phone,
             clinicId: doctor._id,
             state: doctor.state,
@@ -224,12 +482,18 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
             appointmentTime: appointmentTime(doctor, number), bookedAtIndia: indiaDateTime(),
             paymentMethod, paymentStatus: "demo_paid", paymentId: `DEMO-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
         });
-        res.status(201).json({ appointment, token: tokenId(patient.name, number), message: "Appointment confirmed." });
+        if (patient.email) {
+            const otp = generateOTP();
+            const key = `appointment:${patient.email}`;
+            otpStore.set(key, { otp, expires: Date.now() + 10 * 60 * 1000, attempts: 0, lastRequest: Date.now(), userId: patient._id.toString(), appointmentId: appointment._id.toString() });
+            await sendOTPEmail(patient.email, otp, "appointment");
+        }
+        res.status(201).json({ appointment, token: tokenId(finalPatientName, number), message: "Appointment confirmed. OTP sent to email for verification." });
     } catch (e) { if (e.code === 11000) return res.status(409).json({ message: "This appointment or token was just booked. Please refresh and try again." }); res.status(500).json({ message: "Could not book the token." }); }
 });
 app.post("/api/patients/location", auth("patient"), async (req, res) => { const { consent, latitude, longitude } = req.body; if (!consent) { await User.findByIdAndUpdate(req.user.id, { "location.consent": false }); return res.json({ consent: false }); } if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return res.status(400).json({ message: "Valid location coordinates are required." }); await User.findByIdAndUpdate(req.user.id, { "location.consent": true, "location.latitude": latitude, "location.longitude": longitude, "location.capturedAt": new Date() }); res.json({ consent: true }); });
 app.get("/api/tokens/my", auth("patient"), async (req, res) => { const appointments = await Token.find({ patient: req.user.id }).populate("doctor").populate("patient", "name").sort({ visitDate: -1, tokenNumber: 1 }); res.json(appointments.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) }))); });
-app.post("/api/assistant", auth("patient"), async (req, res) => {
+app.post("/api/assistant", auth(), async (req, res) => {
     if (!GROQ_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है। Admin से GROQ_API_KEY set करने को कहें।" });
     const question = String(req.body.question || "").trim();
     if (!question || question.length > 1000) return res.status(400).json({ message: "सवाल 1 से 1000 अक्षरों में लिखें।" });
@@ -280,28 +544,28 @@ Public doctor data (relevant): ${JSON.stringify(doctorContext)}
                 messages: [{ role: "user", content: prompt }],
                 temperature: 0.2,
                 max_tokens: 300
-            })
+            }),
+            signal: AbortSignal.timeout(45000)
         });
-        const data = await response.json();
-        if (!response.ok) return res.status(502).json({ message: "AI assistant से जवाब नहीं मिल पाया। थोड़ी देर बाद फिर कोशिश करें।" });
+        const data = await parseGroqResponse(response);
         const answer = data.choices?.[0]?.message?.content?.trim();
         if (!answer) return res.status(502).json({ message: "AI assistant ने खाली जवाब दिया। फिर कोशिश करें।" });
         res.json({ answer });
     } catch (error) {
         console.error("AI assistant request failed:", error.message);
-        res.status(502).json({ message: "AI assistant अभी उपलब्ध नहीं है।" });
+        res.status(502).json({ message: `AI assistant error: ${error.message}` });
     }
 });
-app.post("/api/assistant/image", auth("patient"), upload.single("image"), async (req, res) => {
+app.post("/api/assistant/image", auth(), upload.single("image"), async (req, res) => {
     if (!GROQ_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है।" });
     if (!req.file) return res.status(400).json({ message: "Image required." });
-    const question = String(req.body.question || "").trim() || "इस दवा/टैबलेट की पहचान करें और इसके उपयोग, खुराक की सामान्य जानकारी, सावधानियां और साइड इफेक्ट्स सरल हिंदी में बताएं।";
+    const question = String(req.body.question || "").trim() || "इस दवा/टैबलेट की पहचान और इसके सामान्य उपयोग बताएं। खुराक या इलाज की सलाह न दें; सावधानियां और संभावित जोखिम बताएं।";
     const base64Image = req.file.buffer.toString("base64");
     const mimeType = req.file.mimetype;
-    const visionModel = "llama-3.2-90b-vision-preview";
-    const prompt = `तुम Sehat Bhabua app के Hindi medical assistant हो। 
+    const visionModel = "qwen/qwen3.8-27b";
+    const prompt = `तुम Sehat Bhabua app के Hindi medical assistant हो।
 दवा/टैबलेट/कैप्सूल/सिरप की फोटो का विश्लेषण करो।
-पहचान बताओ: नाम (ब्रांड + जेनेरिक), उपयोग (किस बीमारी के लिए), सामान्य खुराक जानकारी, सावधानियां, संभावित साइड इफेक्ट्स।
+यदि स्पष्ट हो तो नाम और सामान्य उपयोग बताओ; सावधानियां और संभावित जोखिम बताओ, लेकिन खुराक या इलाज की सलाह न दो।
 **सुरक्षा नियम:**
 - Exact dosage मत बताओ (डॉक्टर से पूछें कहो)
 - Prescription मत दो
@@ -327,16 +591,16 @@ app.post("/api/assistant/image", auth("patient"), upload.single("image"), async 
                 }],
                 temperature: 0.1,
                 max_tokens: 500
-            })
+            }),
+            signal: AbortSignal.timeout(45000)
         });
-        const data = await response.json();
-        if (!response.ok) return res.status(502).json({ message: "Image analysis failed. Try again." });
+        const data = await parseGroqResponse(response);
         const answer = data.choices?.[0]?.message?.content?.trim();
         if (!answer) return res.status(502).json({ message: "Could not analyze image." });
         res.json({ answer, disclaimer: "यह जानकारी केवल सामान्य ज्ञान के लिए है। कृपया दवा लेने से पहले डॉक्टर या फार्मासिस्ट से जरूर सलाह लें।" });
     } catch (error) {
         console.error("Image analysis failed:", error.message);
-        res.status(502).json({ message: "Image analysis unavailable." });
+        res.status(502).json({ message: `Image analysis error: ${error.message}` });
     }
 });
 app.get("/api/tokens/:id/tracking", auth("patient"), async (req, res) => {
@@ -348,7 +612,7 @@ app.get("/api/tokens/:id/tracking", auth("patient"), async (req, res) => {
     const currentRunningToken = current?.tokenNumber || Math.max(0, ...tokens.filter((x) => x.status === "completed").map((x) => x.tokenNumber));
     res.json({ appointmentId: appointment.appointmentId, doctor: appointment.doctor, clinic: appointment.clinic, token: appointment.tokenNumber, tokenId: tokenId(appointment.patient?.name, appointment.tokenNumber), appointmentTime: appointment.appointmentTime, visitDate: appointment.visitDate, status: appointment.status, currentRunningToken, patientsAhead: ahead, estimatedWaitMinutes: ahead * (appointment.doctor.averageMinutes || 10), updatedAt: new Date().toISOString() });
 });
-app.post("/api/support/questions", auth("patient"), async (req, res) => {
+app.post("/api/support/questions", auth(), async (req, res) => {
     const question = String(req.body.question || "").trim();
     if (!question || question.length > 500) return res.status(400).json({ message: "अपना सवाल 1 से 500 अक्षरों में लिखें।" });
     const item = await SupportQuestion.create({ patient: req.user.id, question });
@@ -362,7 +626,7 @@ app.post("/api/support/questions", auth("patient"), async (req, res) => {
     });
     res.status(201).json({ id: item._id, message: "आपका सवाल team को भेज दिया गया है।" });
 });
-app.get("/api/support/questions/my", auth("patient"), async (req, res) => {
+app.get("/api/support/questions/my", auth(), async (req, res) => {
     const items = await SupportQuestion.find({ patient: req.user.id }).sort({ createdAt: -1 }).limit(20);
     res.json(items);
 });
@@ -400,7 +664,16 @@ app.patch("/api/admin/questions/:id", auth("admin"), async (req, res) => {
     }
     res.json(item);
 });
-app.get("/api/health", (req, res) => res.json({ status: "ok", city: "Bhabua", district: "Kaimur" }));
+app.get("/api/health", (req, res) => res.json({
+    status: "ok",
+    city: "Bhabua",
+    district: "Kaimur",
+    providers: {
+        emailOtpConfigured: Boolean(emailTransporter),
+        smsOtpEnabled: false,
+        ai: Boolean(GROQ_API_KEY)
+    }
+}));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 mongoose.connect(MONGODB_URI).then(async () => {
    await ensureAdminAccount();

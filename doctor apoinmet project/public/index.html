@@ -34,13 +34,17 @@
         <section id="auth-panel" class="card login-card" hidden>
             <h2>Patient login / registration</h2>
             <div class="grid">
-                <input id="name" placeholder="पूरा नाम (registration के लिए)">
-                <input id="phone" placeholder="Mobile number" inputmode="tel">
-                <input id="password" type="password" placeholder="Password (6+ characters)">
+                <input id="name" placeholder="पूरा नाम (नए users के लिए)" hidden>
+                <input id="email" type="email" autocomplete="email" placeholder="Email address">
+                <input id="phone" type="tel" autocomplete="tel" placeholder="Contact mobile (नए users के लिए; verify नहीं होगा)" inputmode="tel" hidden>
             </div>
-            <div class="actions"><button id="register">Register</button><button id="login" class="secondary">Login</button><button id="forgot-password" class="secondary">Forgot password</button></div>
+            <div class="actions"><button id="send-otp">Email पर OTP भेजें</button></div>
+            <small class="help-text">OTP आपके email पर आएगा। नए account के लिए नाम और clinic contact mobile number भी भरें।</small>
+            <div id="otp-panel" hidden>
+                <input id="otp" placeholder="6-digit OTP" inputmode="numeric" maxlength="6">
+                <div class="actions"><button id="verify-otp">Verify OTP & Login</button><button id="resend-otp" class="secondary">Resend OTP</button></div>
+            </div>
             <p id="auth-message" class="message"></p>
-            <div id="forgot-panel" hidden><input id="otp" placeholder="6-digit demo OTP" inputmode="numeric"><input id="new-password" type="password" placeholder="New password (6+ characters)"><button id="verify-otp">Verify OTP & update password</button><p id="forgot-message" class="message"></p></div>
             <button id="location-button" class="secondary">Nearby doctors के लिए location allow करें</button>
             <small class="help-text">Location के लिए पहले login करें और browser में Allow दबाएँ। Mobile पर यह सुविधा HTTPS या localhost पर ही चलती है।</small>
             <p id="location-message" class="message"></p>
@@ -48,7 +52,7 @@
         <section class="card">
             <div class="section-heading"><div><p class="eyebrow">अपनी जरूरत के अनुसार खोजें</p><h2>Doctor और clinic चुनें</h2><p class="section-hint">नाम, specialty या clinic search करें और सही doctor तुरंत चुनें</p></div></div>
             <div class="search-box"><span class="search-icon" aria-hidden="true">⌕</span><input id="search" autocomplete="off" placeholder="Doctor का नाम, specialty या clinic खोजें"><div id="search-suggestions" class="search-suggestions" hidden></div><p class="nearby-doctor-hint">अपने शहर के नजदीक का doctor चुनें</p></div>
-            <div class="grid"><select id="state"><option>State चुनें</option></select><select id="district" disabled><option>पहले State चुनें</option></select><select id="city" disabled><option>पहले District चुनें</option></select></div>
+            <div class="grid"><select id="state"><option value="">State चुनें</option></select><select id="district" disabled><option value="">पहले State चुनें</option></select><select id="city" disabled><option value="">पहले District चुनें</option></select></div>
             <div id="doctors" class="doctor-list"><p>Doctors लोड हो रहे हैं...</p></div>
         </section>
         <section id="doctor-details" class="card details-card" hidden>
@@ -85,6 +89,6 @@
     </main>
     <footer class="site-footer"><a href="/admin.html">Team dashboard</a><a href="/doctor.html">Doctor dashboard</a></footer>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="app.js?v=11"></script>
+    <script src="app.js?v=14"></script>
 </body>
 </html>

@@ -1,18 +1,26 @@
 const state = { token: localStorage.getItem("bhabua-token") || "", doctors: [], user: null, socket: null };
 const $ = (s) => document.querySelector(s);
+
 async function api(url, options = {}) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
     if (state.token) headers.Authorization = `Bearer ${state.token}`;
     const response = await fetch(url, { ...options, headers });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({ message: "Server returned an invalid response." }));
     if (response.status === 401) { state.token = ""; localStorage.removeItem("bhabua-token"); updateIdentity(); }
     if (!response.ok) throw new Error(data.message || "Request failed.");
     return data;
 }
 function showNotification(title, body) {
-    if (Notification.permission === "granted") {
+    if ("Notification" in window && Notification.permission === "granted") {
         new Notification(title, { body, icon: "/favicon.ico", tag: "patient-notification" });
     }
+}
+function requestNotifications() {
+    if (!("Notification" in window)) {
+        initSocket();
+        return;
+    }
+    Notification.requestPermission().then(initSocket).catch((error) => console.warn("Notification permission unavailable:", error.message));
 }
 function initSocket() {
     if (state.socket || !state.token) return;
@@ -40,15 +48,71 @@ function updateIdentity() {
     $("#logout").hidden = !state.token; $("#header-auth-button").textContent = state.token ? "Account" : "Login / Register";
     $("#auth-panel").hidden = !!state.token;
 }
-async function authenticate(endpoint) {
-    try {
-        const data = await api(`/api/auth/${endpoint}`, { method: "POST", body: JSON.stringify({ name: $("#name").value, phone: $("#phone").value, password: $("#password").value }) });
-        state.token = data.token; state.user = data.user; localStorage.setItem("bhabua-token", state.token);
-        $("#auth-message").textContent = `नमस्ते ${data.user.name}, अब आप token ले सकते हैं।`; updateIdentity(); loadAppointments();
-        Notification.requestPermission().then(() => { initSocket(); });
-    } catch (e) { $("#auth-message").textContent = e.message; }
+function finishLogin(data) {
+    state.token = data.token;
+    state.user = data.user;
+    localStorage.setItem("bhabua-token", state.token);
+    $("#auth-message").textContent = `नमस्ते ${data.user.name}, अब आप token ले सकते हैं।`;
+    $("#name").hidden = true;
+    $("#name").required = false;
+    $("#phone").hidden = true;
+    $("#phone").required = false;
+    $("#otp-panel").hidden = true;
+    $("#send-otp").hidden = false;
+    updateIdentity();
+    loadAppointments();
+    requestNotifications();
 }
-async function loadSession() { if (!state.token) return; try { state.user = (await api("/api/auth/me")).user; updateIdentity(); loadAppointments(); Notification.requestPermission().then(() => { initSocket(); }); } catch { updateIdentity(); } }
+
+async function sendOTP() {
+    const email = $("#email").value.trim().toLowerCase();
+    if (!email) { $("#auth-message").textContent = "अपना email address डालें।"; return; }
+    $("#auth-message").textContent = "OTP भेजा जा रहा है...";
+    $("#name").hidden = true;
+    $("#name").required = false;
+    $("#phone").hidden = true;
+    $("#phone").required = false;
+    try {
+        const data = await api("/api/auth/otp/send", { method: "POST", body: JSON.stringify({ contact: email, type: "login" }) });
+        $("#name").hidden = !data.isNewUser;
+        $("#name").required = Boolean(data.isNewUser);
+        $("#phone").hidden = !data.isNewUser;
+        $("#phone").required = Boolean(data.isNewUser);
+        $("#auth-message").textContent = data.message;
+        $("#send-otp").hidden = true;
+        $("#otp-panel").hidden = false;
+        $("#otp").focus();
+    } catch (error) {
+        $("#send-otp").hidden = false;
+        $("#otp-panel").hidden = true;
+        $("#auth-message").textContent = error.message;
+    }
+}
+
+async function verifyOTP() {
+    const email = $("#email").value.trim().toLowerCase();
+    const otp = $("#otp").value.trim();
+    if (!otp || otp.length !== 6) { $("#auth-message").textContent = "Enter 6-digit OTP."; return; }
+
+    try {
+        const data = await api("/api/auth/otp/verify", {
+            method: "POST",
+            body: JSON.stringify({
+                contact: email,
+                otp,
+                type: "login",
+                name: $("#name").value.trim(),
+                phone: $("#phone").value.trim()
+            })
+        });
+        finishLogin(data);
+    } catch (error) { $("#auth-message").textContent = error.message; }
+}
+
+async function resendOTP() {
+    await sendOTP();
+}
+async function loadSession() { if (!state.token) return; try { state.user = (await api("/api/auth/me")).user; updateIdentity(); loadAppointments(); requestNotifications(); } catch { updateIdentity(); } }
 async function loadLocations() {
     try {
         const data = await api("/api/locations");
@@ -57,8 +121,9 @@ async function loadLocations() {
         $("#city").innerHTML = "<option value=''>City/Market चुनें</option>";
         window.locationData = data;
     } catch (error) {
-        $("#doctors").innerHTML = `<div class="error-box"><strong>Doctors load नहीं हो पाए।</strong><p>${error.message}</p><small>http://localhost:3000 से app खोलें और Ctrl + F5 दबाएँ।</small></div>`;
+        console.error("Location filters could not be loaded:", error.message);
     }
+    await loadDoctors();
 }
 function fillDistricts() {
     const district = $("#district");
@@ -98,10 +163,6 @@ async function loadSearchSuggestions() {
 async function loadDoctors() {
     try {
         const search = $("#search").value.trim();
-        if (!search && (!$("#state").value || !$("#district").value || !$("#city").value)) {
-            $("#doctors").innerHTML = "<p>State, District और City/Market चुनें।</p>";
-            return;
-        }
         const params = new URLSearchParams({ search });
         if ($("#state").value) params.set("state", $("#state").value);
         if ($("#district").value) params.set("district", $("#district").value);
@@ -170,7 +231,7 @@ async function askAssistant() {
                 headers: { "Authorization": `Bearer ${state.token}` },
                 body: formData
             });
-            data = await response.json();
+            data = await response.json().catch(() => ({ message: "AI service returned an invalid response." }));
             if (!response.ok) throw new Error(data.message || "Analysis failed");
             clearImagePreview();
             thinkingDiv.remove();
@@ -192,13 +253,17 @@ function showImagePreview(file) {
     const url = URL.createObjectURL(file);
     const preview = $("#image-preview");
     preview.hidden = false;
+    preview.dataset.objectUrl = url;
     preview.innerHTML = `<img src="${url}" alt="Preview"><button type="button" onclick="clearImagePreview()" aria-label="Remove image">×</button>`;
     addChatMessage("user", "📷 फोटो भेजी गई", false);
 }
 function clearImagePreview() {
     selectedImageFile = null;
-    $("#image-preview").hidden = true;
-    $("#image-preview").innerHTML = "";
+    const preview = $("#image-preview");
+    if (preview.dataset.objectUrl) URL.revokeObjectURL(preview.dataset.objectUrl);
+    delete preview.dataset.objectUrl;
+    preview.hidden = true;
+    preview.innerHTML = "";
     $("#assistant-image").value = "";
 }
 window.clearImagePreview = clearImagePreview;
@@ -216,16 +281,16 @@ async function showDoctorDetails(id) {
     const doctor = state.doctors.find((x) => x._id === id); if (!doctor) return;
     try {
         const status = await api(`/api/doctors/${id}/status`); $("#doctors").closest(".card").hidden = true; $("#doctor-details").hidden = false;
-        $("#details-content").innerHTML = `<h2>${doctor.name}</h2><p class="detail-specialty">${doctor.specialty} · ${doctor.clinic} · ${doctor.district}</p><div class="info-grid"><div><strong>Fee</strong><b>₹${doctor.fee}</b></div><div><strong>Total / Booked / Available</strong><b id="availability-summary">${status.total} / ${status.booked} / ${status.available}</b></div><div><strong>Current token</strong><b id="current-token">#${status.currentToken || "—"}</b></div><div><strong>Days and timing</strong><b>${doctor.availableDays.join(", ")} · ${doctor.openingTime}-${doctor.closingTime}</b></div></div><form class="booking-form" data-doctor="${id}"><label>Date<input id="visit-date" type="date" required></label><label>Token<select id="preferred-token">${status.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("")}</select></label><label>Demo payment<select id="payment-method" required><option value="demo_cash">Demo Cash</option><option value="demo_upi">Demo UPI</option><option value="demo_card">Demo Card</option></select></label><button>Pay demo & book</button></form><p class="payment-note">यह केवल demo payment है; कोई real पैसा नहीं कटेगा।</p><p id="booking-message" class="message"></p><div id="booking-confirmation" class="booking-confirmation" hidden></div>`;
-        $("#visit-date").min = new Date().toISOString().slice(0, 10);
+        $("#details-content").innerHTML = `<h2>${doctor.name}</h2><p class="detail-specialty">${doctor.specialty} · ${doctor.clinic} · ${doctor.district}</p><div class="info-grid"><div><strong>Fee</strong><b>₹${doctor.fee}</b></div><div><strong>Total / Booked / Available</strong><b id="availability-summary">${status.total} / ${status.booked} / ${status.available}</b></div><div><strong>Current token</strong><b id="current-token">#${status.currentToken || "—"}</b></div><div><strong>Days and timing</strong><b>${doctor.availableDays.join(", ")} · ${doctor.openingTime}-${doctor.closingTime}</b></div></div><form class="booking-form" data-doctor="${id}"><label>Patient Name<input id="patient-name" type="text" placeholder="रोगी का नाम" required></label><label>Patient Age<input id="patient-age" type="number" placeholder="उम्र" min="1" max="120" required></label><label>Date<input id="visit-date" type="date" required></label><label>Token<select id="preferred-token">${status.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("")}</select></label><label>Demo payment<select id="payment-method" required><option value="demo_cash">Demo Cash</option><option value="demo_upi">Demo UPI</option><option value="demo_card">Demo Card</option></select></label><button>Pay demo & book</button></form><p class="payment-note">यह केवल demo payment है; कोई real पैसा नहीं कटेगा।</p><p id="booking-message" class="message"></p><div id="booking-confirmation" class="booking-confirmation" hidden></div>`;
+        $("#visit-date").min = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
         $("#visit-date").addEventListener("change", async (event) => { try { const next = await api(`/api/doctors/${id}/status?date=${event.target.value}`); $("#availability-summary").textContent = `${next.total} / ${next.booked} / ${next.available}`; $("#current-token").textContent = `#${next.currentToken || "—"}`; $("#preferred-token").innerHTML = next.availableTokens.length ? next.availableTokens.map((n) => `<option value="${n}">Token ${n}</option>`).join("") : "<option value=''>No token available</option>"; } catch (error) { $("#booking-message").textContent = error.message; } });
     } catch (e) { alert(e.message); }
 }
 $("#header-auth-button").addEventListener("click", () => { if (state.token) { $("#appointments").scrollIntoView({ behavior: "smooth" }); return; } $("#auth-panel").hidden = !$("#auth-panel").hidden; });
 $("#logout").addEventListener("click", () => { state.token = ""; state.user = null; localStorage.removeItem("bhabua-token"); updateIdentity(); loadAppointments(); });
-$("#register").addEventListener("click", () => authenticate("register")); $("#login").addEventListener("click", () => authenticate("login"));
-$("#forgot-password").addEventListener("click", async () => { $("#forgot-panel").hidden = false; try { const d = await api("/api/auth/forgot-password/request", { method: "POST", body: JSON.stringify({ phone: $("#phone").value }) }); $("#forgot-message").textContent = `${d.message} ${d.demoOtp ? `Demo OTP: ${d.demoOtp}` : ""}`; } catch (e) { $("#forgot-message").textContent = e.message; } });
-$("#verify-otp").addEventListener("click", async () => { try { const d = await api("/api/auth/forgot-password/verify", { method: "POST", body: JSON.stringify({ phone: $("#phone").value, otp: $("#otp").value, newPassword: $("#new-password").value }) }); $("#forgot-message").textContent = d.message; } catch (e) { $("#forgot-message").textContent = e.message; } });
+$("#send-otp").addEventListener("click", sendOTP);
+$("#verify-otp").addEventListener("click", verifyOTP);
+$("#resend-otp").addEventListener("click", resendOTP);
 $("#refresh").addEventListener("click", loadAppointments);
 $("#ask-support").addEventListener("click", async () => { if (!state.token) { $("#auth-panel").hidden = false; $("#support-message").textContent = "सवाल भेजने के लिए पहले login करें।"; return; } try { const d = await api("/api/support/questions", { method: "POST", body: JSON.stringify({ question: $("#support-question").value }) }); $("#support-question").value = ""; $("#support-message").textContent = d.message; loadSupportQuestions(); } catch (e) { $("#support-message").textContent = e.message; } });
 $("#assistant-ask").addEventListener("click", askAssistant);
@@ -278,6 +343,7 @@ $("#assistant-attach").addEventListener("click", () => {
 $("#assistant-image").addEventListener("change", (e) => { const file = e.target.files[0]; if (file) showImagePreview(file); });
 $("#assistant-question").addEventListener("input", function() { this.style.height = "auto"; this.style.height = Math.min(this.scrollHeight, 120) + "px"; });
 $("#assistant-question").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); askAssistant(); } });
+$("#otp").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); verifyOTP(); } });
 $("#search").addEventListener("input", () => {
     clearTimeout(suggestionTimer);
     suggestionTimer = setTimeout(loadSearchSuggestions, 180);
@@ -301,5 +367,5 @@ $("#state").addEventListener("change", fillDistricts); $("#district").addEventLi
 $("#back-to-doctors").addEventListener("click", () => { $("#doctor-details").hidden = true; $("#doctors").closest(".card").hidden = false; });
 $("#doctors").addEventListener("click", (e) => { const card = e.target.closest(".doctor"); if (card) showDoctorDetails(card.dataset.doctorId); });
 $("#appointments").addEventListener("click", (e) => { if (e.target.classList.contains("refresh-tracking")) loadAppointments(); });
-$("#doctor-details").addEventListener("submit", async (e) => { e.preventDefault(); if (!state.token) { $("#auth-panel").hidden = false; $("#booking-message").textContent = "Please login first."; return; } try { const data = await api("/api/tokens", { method: "POST", body: JSON.stringify({ doctorId: e.target.dataset.doctor, visitDate: $("#visit-date").value, preferredToken: $("#preferred-token").value, paymentMethod: $("#payment-method").value }) }); const appointment = data.appointment; $("#booking-message").textContent = data.message || "Appointment booked successfully."; $("#booking-confirmation").hidden = false; $("#booking-confirmation").innerHTML = `<h3>Appointment confirmed ✓</h3><div class="booking-confirmation-grid"><div><strong>Appointment ID</strong><b>${appointment.appointmentId}</b></div><div><strong>Token</strong><b>${data.token}</b></div><div><strong>Date</strong><b>${appointment.visitDate}</b></div><div><strong>Time</strong><b>${appointment.appointmentTime || "Clinic timing"}</b></div><div><strong>Payment</strong><b>${appointment.paymentMethod} · Demo paid</b></div><div><strong>Status</strong><b>${appointment.status}</b></div></div>`; loadAppointments(); } catch (error) { $("#booking-message").textContent = error.message; } });
+$("#doctor-details").addEventListener("submit", async (e) => { e.preventDefault(); if (!state.token) { $("#auth-panel").hidden = false; $("#booking-message").textContent = "Please login first."; return; } try { const data = await api("/api/tokens", { method: "POST", body: JSON.stringify({ doctorId: e.target.dataset.doctor, visitDate: $("#visit-date").value, preferredToken: $("#preferred-token").value, paymentMethod: $("#payment-method").value, patientName: $("#patient-name").value, patientAge: $("#patient-age").value }) }); const appointment = data.appointment; $("#booking-message").textContent = data.message || "Appointment booked successfully."; $("#booking-confirmation").hidden = false; $("#booking-confirmation").innerHTML = `<h3>Appointment confirmed ✓</h3><div class="booking-confirmation-grid"><div><strong>Appointment ID</strong><b>${appointment.appointmentId}</b></div><div><strong>Token</strong><b>${data.token}</b></div><div><strong>Date</strong><b>${appointment.visitDate}</b></div><div><strong>Time</strong><b>${appointment.appointmentTime || "Clinic timing"}</b></div><div><strong>Payment</strong><b>${appointment.paymentMethod} · Demo paid</b></div><div><strong>Status</strong><b>${appointment.status}</b></div></div>`; loadAppointments(); } catch (error) { $("#booking-message").textContent = error.message; } });
 updateIdentity(); loadLocations(); loadSession();
