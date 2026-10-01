@@ -80,6 +80,7 @@ button.secondary { background: #e5f1f0; color: #0f6b70; }
 .doctor-avatar { align-items: center; background: #d9f0ee; border-radius: 50%; color: #0f6b70; display: flex; font-weight: bold; height: 45px; justify-content: center; margin-bottom: 12px; width: 45px; }
 .doctor p, .appointment p { color: #65777d; margin: 6px 0 14px; }
 .doctor-summary { color: #0f6b70; display: flex; font-size: .9rem; font-weight: bold; justify-content: space-between; margin-top: 18px; }
+.doctor-load-more { grid-column: 1 / -1; justify-self: center; margin: 4px 0 8px; max-width: 320px; width: 100%; }
 .error-box { background: #fff1f0; border: 1px solid #f0b8b3; border-radius: 8px; color: #8a2118; padding: 16px; }
 .error-box p { margin: 8px 0; }
 .details-card { min-height: 300px; }
@@ -138,6 +139,9 @@ button.secondary { background: #e5f1f0; color: #0f6b70; }
     .doctor-avatar { height: 40px; width: 40px; }
     .doctor h3 { font-size: 1.1rem; }
     .doctor p, .appointment p { font-size: 0.9rem; }
+    .doctor { padding: 12px; }
+    .doctor-avatar { height: 34px; margin-bottom: 8px; width: 34px; }
+    .doctor-summary { margin-top: 10px; }
     .appointment { padding: 14px; }
     .tracking { padding: 10px; }
     .info-grid div { padding: 12px; }

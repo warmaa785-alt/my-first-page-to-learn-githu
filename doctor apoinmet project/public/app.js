@@ -1,5 +1,6 @@
-const state = { token: localStorage.getItem("bhabua-token") || "", doctors: [], user: null, socket: null };
+const state = { token: localStorage.getItem("bhabua-token") || "", doctors: [], visibleDoctorCount: 0, user: null, socket: null };
 const $ = (s) => document.querySelector(s);
+const doctorPageSize = () => window.matchMedia("(max-width: 650px)").matches ? 4 : 8;
 
 async function api(url, options = {}) {
     const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
@@ -164,6 +165,16 @@ async function loadSearchSuggestions() {
         box.hidden = true;
     }
 }
+function renderDoctors() {
+    const visibleDoctors = state.doctors.slice(0, state.visibleDoctorCount);
+    const remaining = state.doctors.length - visibleDoctors.length;
+    $("#doctors").innerHTML = visibleDoctors.map((d) => `<article class="doctor" data-doctor-id="${d._id}" tabindex="0"><div class="doctor-avatar">${escapeHtml(d.name.replace("Dr. ", "").split(" ").map((x) => x[0]).slice(0, 2).join(""))}</div><h3>${escapeHtml(d.name)}</h3><strong>${escapeHtml(d.specialty)}</strong><p>${escapeHtml(d.clinic)}<br>${escapeHtml(d.address)}</p><p class="doctor-rating">${d.averageRating ? `★ ${d.averageRating} / 5` : "अभी कोई rating नहीं"} · ${d.ratingCount} patient feedback</p><div class="doctor-summary"><span>Fee ₹${d.fee}</span><span>Details देखें →</span></div></article>`).join("");
+    if (remaining > 0) {
+        $("#doctors").insertAdjacentHTML("beforeend", `<button id="load-more-doctors" class="secondary doctor-load-more" type="button">और डॉक्टर देखें (${remaining} बाकी)</button>`);
+    } else if (!visibleDoctors.length) {
+        $("#doctors").innerHTML = "<p>इस location में doctor नहीं मिला।";
+    }
+}
 async function loadDoctors() {
     try {
         const search = $("#search").value.trim();
@@ -172,7 +183,8 @@ async function loadDoctors() {
         if ($("#district").value) params.set("district", $("#district").value);
         if ($("#city").value) params.set("city", $("#city").value);
         state.doctors = await api(`/api/doctors?${params}`);
-        $("#doctors").innerHTML = state.doctors.length ? state.doctors.map((d) => `<article class="doctor" data-doctor-id="${d._id}" tabindex="0"><div class="doctor-avatar">${escapeHtml(d.name.replace("Dr. ", "").split(" ").map((x) => x[0]).slice(0, 2).join(""))}</div><h3>${escapeHtml(d.name)}</h3><strong>${escapeHtml(d.specialty)}</strong><p>${escapeHtml(d.clinic)}<br>${escapeHtml(d.address)}</p><p class="doctor-rating">${d.averageRating ? `★ ${d.averageRating} / 5` : "अभी कोई rating नहीं"} · ${d.ratingCount} patient feedback</p><div class="doctor-summary"><span>Fee ₹${d.fee}</span><span>Details देखें →</span></div></article>`).join("") : "<p>इस location में doctor नहीं मिला।";
+        state.visibleDoctorCount = Math.min(doctorPageSize(), state.doctors.length);
+        renderDoctors();
     } catch (e) { $("#doctors").innerHTML = `<div class="error-box">${e.message}</div>`; }
 }
 async function trackingCard(x) {
@@ -426,7 +438,16 @@ document.addEventListener("click", (event) => {
 });
 $("#state").addEventListener("change", fillDistricts); $("#district").addEventListener("change", fillCities); $("#city").addEventListener("change", loadDoctors);
 $("#back-to-doctors").addEventListener("click", () => { $("#doctor-details").hidden = true; $("#doctors").closest(".card").hidden = false; });
-$("#doctors").addEventListener("click", (e) => { const card = e.target.closest(".doctor"); if (card) showDoctorDetails(card.dataset.doctorId); });
+$("#doctors").addEventListener("click", (e) => {
+    const more = e.target.closest("#load-more-doctors");
+    if (more) {
+        state.visibleDoctorCount = Math.min(state.visibleDoctorCount + doctorPageSize(), state.doctors.length);
+        renderDoctors();
+        return;
+    }
+    const card = e.target.closest(".doctor");
+    if (card) showDoctorDetails(card.dataset.doctorId);
+});
 $("#appointments").addEventListener("click", (e) => { if (e.target.classList.contains("refresh-tracking")) loadAppointments(); });
 $("#doctor-details").addEventListener("submit", async (event) => {
     if (!event.target.matches(".booking-form")) return;
