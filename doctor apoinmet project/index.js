@@ -2,6 +2,7 @@ require("dotenv").config();
 
 const path = require("path");
 const crypto = require("crypto");
+const dns = require("node:dns");
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
@@ -14,6 +15,8 @@ const nodemailer = require("nodemailer");
 const { cert, getApp, getApps, initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
 const QRCode = require("qrcode");
+
+if (process.env.SMTP_HOST) dns.setDefaultResultOrder("ipv4first");
 
 const upload = multer({
     storage: multer.memoryStorage(),
