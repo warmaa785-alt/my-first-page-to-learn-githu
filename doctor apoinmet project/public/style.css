@@ -76,9 +76,10 @@ button.secondary { background: #e5f1f0; color: #0f6b70; }
 .doctor, .appointment { border: 1px solid #dce8e8; border-radius: 10px; cursor: pointer; padding: 16px; transition: .2s; }
 .doctor:hover, .doctor:focus { border-color: #0f6b70; box-shadow: 0 5px 18px #0f6b7020; transform: translateY(-2px); }
 .doctor h3 { margin: 0 0 6px; }
+.doctor-rating { color: #9a6500; font-weight: 700; }
 .doctor-avatar { align-items: center; background: #d9f0ee; border-radius: 50%; color: #0f6b70; display: flex; font-weight: bold; height: 45px; justify-content: center; margin-bottom: 12px; width: 45px; }
 .doctor p, .appointment p { color: #65777d; margin: 6px 0 14px; }
-.doctor-summary { color: #0f6b70; display: flex; font-size: .9rem; font-weight: bold; justify-content: space-between; }
+.doctor-summary { color: #0f6b70; display: flex; font-size: .9rem; font-weight: bold; justify-content: space-between; margin-top: 18px; }
 .error-box { background: #fff1f0; border: 1px solid #f0b8b3; border-radius: 8px; color: #8a2118; padding: 16px; }
 .error-box p { margin: 8px 0; }
 .details-card { min-height: 300px; }
@@ -147,3 +148,11 @@ button.secondary { background: #e5f1f0; color: #0f6b70; }
     .hero > p:not(.tag) { font-size: 1rem; }
     .site-footer { padding: 0 12px 20px; gap: 12px; }
 }
+
+select { border: 1px solid #cbdcdb; border-radius: 7px; font: inherit; padding: 12px; width: 100%; }
+.feedback-form, .payment-reference-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.feedback-form label, .payment-reference-form label { display: flex; flex-direction: column; font-weight: bold; gap: 6px; }
+.feedback-form select, .feedback-form textarea, .payment-reference-form input { max-width: 100%; }
+.upi-pay-link { background: #0f6b70; border-radius: 7px; color: white; display: inline-block; font-weight: bold; margin: 8px 0; padding: 12px 18px; text-decoration: none; }
+.upi-qr { background: white; border: 1px solid #dce8e8; border-radius: 8px; display: block; height: 240px; margin: 12px 0; max-width: 100%; padding: 8px; width: 240px; }
+button:disabled { cursor: wait; opacity: .6; }

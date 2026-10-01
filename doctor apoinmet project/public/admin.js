@@ -1,12 +1,196 @@
-const adminState = { token: "", socket: null }; const admin$ = (s) => document.querySelector(s);
-async function adminApi(url, options = {}) { const headers = { "Content-Type": "application/json", ...(options.headers || {}) }; if (adminState.token) headers.Authorization = `Bearer ${adminState.token}`; const r = await fetch(url, { ...options, headers }); const d = await r.json(); if (!r.ok) throw new Error(d.message || "Request failed."); return d; }
-function indiaDateTime(value) { return value ? new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short", timeZone: "Asia/Kolkata" }).format(new Date(value)) : "—"; }
-function render(items) { admin$("#admin-appointments").innerHTML = items.length ? items.map((x) => `<article class="appointment"><strong>${x.tokenId} · ${x.status}</strong><p><b>Appointment ID:</b> ${x.appointmentId || "—"}<br><b>Patient:</b> ${x.patientName} · ${x.phone || x.patientPhone || "—"}<br><b>Doctor:</b> ${x.doctor} · ${x.clinic}<br><b>Visit date & time:</b> ${x.visitDate} · ${x.appointmentTime || "Clinic timing"}<br><b>Token booked at (India):</b> ${x.bookedAtIndia || indiaDateTime(x.createdAt)}<br><b>Payment:</b> ${x.paymentMethod || "demo_cash"} · ${x.paymentStatus || "demo_paid"} · ${x.paymentId || "—"}<br><b>Location:</b> ${x.district || "—"}</p></article>`).join("") : "<p>अभी कोई booking नहीं है।"; }
-function renderQuestions(items) { admin$("#admin-questions").innerHTML = items.length ? items.map((x) => `<article class="appointment"><b>${x.patient?.name || "Patient"} · ${x.patient?.phone || "—"}</b><p>${x.question}</p>${x.status === "answered" ? `<p><b>जवाब:</b> ${x.answer}</p>` : `<textarea data-question="${x._id}" maxlength="1000" placeholder="Patient को जवाब लिखें"></textarea><button data-answer="${x._id}">जवाब भेजें</button>`}</article>`).join("") : "<p>अभी कोई सवाल नहीं है।"; }
-function showNotification(title, body) { if (Notification.permission === "granted") { new Notification(title, { body, icon: "/favicon.ico", tag: "admin-notification" }); } }
-async function load() { try { const d = await adminApi(`/api/admin/tokens?date=${admin$("#admin-date").value}`); render(d); const questions = await adminApi("/api/admin/questions"); renderQuestions(questions); } catch (e) { admin$("#admin-message").textContent = e.message; } }
-function initSocket() { if (adminState.socket) return; adminState.socket = io(); adminState.socket.on("connect", () => { console.log("Socket connected"); adminState.socket.emit("join-admin"); }); adminState.socket.on("new-question", (data) => { console.log("New question received:", data); showNotification("🔔 नया सवाल आया!", `${data.patientName || "Patient"} (${data.patientPhone || "No phone"}) ने पूछा: ${data.question.slice(0, 50)}...`); load(); }); adminState.socket.on("disconnect", () => { console.log("Socket disconnected, reconnecting..."); setTimeout(initSocket, 5000); }); adminState.socket.on("connect_error", (err) => { console.error("Socket error:", err); setTimeout(initSocket, 5000); }); }
+const adminState = { token: "", socket: null };
+const admin$ = (selector) => document.querySelector(selector);
+
+async function adminApi(url, options = {}) {
+    const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+    if (adminState.token) headers.Authorization = `Bearer ${adminState.token}`;
+    const response = await fetch(url, { ...options, headers });
+    const data = await response.json().catch(() => ({ message: "Server returned an invalid response." }));
+    if (!response.ok) throw new Error(data.message || "Request failed.");
+    return data;
+}
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    })[character]);
+}
+
+function indiaDateTime(value) {
+    return value ? new Intl.DateTimeFormat("en-IN", {
+        dateStyle: "medium",
+        timeStyle: "short",
+        timeZone: "Asia/Kolkata"
+    }).format(new Date(value)) : "—";
+}
+
+function renderAppointments(items) {
+    admin$("#admin-appointments").innerHTML = items.length ? items.map((item) => `
+        <article class="appointment">
+            <strong>${escapeHtml(item.tokenId)} · ${escapeHtml(item.status)}</strong>
+            <p>
+                <b>Appointment ID:</b> ${escapeHtml(item.appointmentId || "—")}<br>
+                <b>Patient:</b> ${escapeHtml(item.patientName)} · ${escapeHtml(item.phone || item.patientPhone || "—")}<br>
+                <b>Doctor:</b> ${escapeHtml(item.doctor)} · ${escapeHtml(item.clinic)}<br>
+                <b>Visit date & time:</b> ${escapeHtml(item.visitDate)} · ${escapeHtml(item.appointmentTime || "Clinic timing")}<br>
+                <b>Token booked at (India):</b> ${escapeHtml(item.bookedAtIndia || indiaDateTime(item.createdAt))}<br>
+                <b>Payment:</b> ₹${escapeHtml(item.fee)} · ${escapeHtml(item.paymentStatus || "—")} · ${escapeHtml(item.paymentReference || item.paymentId || "—")}<br>
+                <b>Location:</b> ${escapeHtml(item.district || "—")}
+            </p>
+        </article>`).join("") : "<p>अभी कोई booking नहीं है।";
+}
+
+function renderPayments(items) {
+    const pending = items.filter((item) => item.paymentMethod === "upi_manual" && item.paymentStatus === "submitted");
+    admin$("#admin-payments").innerHTML = pending.length ? pending.map((item) => `
+        <article class="appointment">
+            <strong>${escapeHtml(item.appointmentId)} · ₹${escapeHtml(item.fee)}</strong>
+            <p>
+                Patient: ${escapeHtml(item.patientName)} · ${escapeHtml(item.patientPhone)}<br>
+                Doctor: ${escapeHtml(item.doctor)} · ${escapeHtml(item.clinic)}<br>
+                UPI reference: <b>${escapeHtml(item.paymentReference)}</b><br>
+                Date: ${escapeHtml(item.visitDate)} · Token ${escapeHtml(item.tokenNumber)}
+            </p>
+            <div class="actions">
+                <button type="button" data-payment="${escapeHtml(item.id)}" data-status="confirmed">UPI में verify करके approve</button>
+                <button type="button" class="secondary" data-payment="${escapeHtml(item.id)}" data-status="failed">Payment नहीं मिला</button>
+            </div>
+        </article>`).join("") : "<p>अभी कोई payment verification pending नहीं है।";
+}
+
+function renderFeedback(items) {
+    admin$("#admin-feedback").innerHTML = items.length ? items.map((item) => `
+        <article class="appointment">
+            <strong>${escapeHtml(item.doctor?.name || "Doctor")} · ${"★".repeat(item.rating)}${"☆".repeat(5 - item.rating)}</strong>
+            <p>
+                Patient: ${escapeHtml(item.patient?.name || "Patient")} · ${escapeHtml(item.patient?.phone || "—")}<br>
+                Appointment: ${escapeHtml(item.appointment?.appointmentId || "—")} · ${escapeHtml(item.appointment?.visitDate || "—")}<br>
+                ${escapeHtml(item.doctor?.clinic || "")}
+            </p>
+            ${item.comment ? `<p>${escapeHtml(item.comment)}</p>` : "<p>कोई comment नहीं।"}
+        </article>`).join("") : "<p>अभी कोई feedback नहीं आया है।";
+}
+
+function renderQuestions(items) {
+    admin$("#admin-questions").innerHTML = items.length ? items.map((item) => `
+        <article class="appointment" id="question-${escapeHtml(item._id)}">
+            <b>${escapeHtml(item.patient?.name || "Patient")} · ${escapeHtml(item.patient?.phone || "—")}</b>
+            <p>${escapeHtml(item.question)}</p>
+            ${item.status === "answered"
+                ? `<p><b>जवाब:</b> ${escapeHtml(item.answer)}</p>`
+                : `<textarea data-question="${escapeHtml(item._id)}" maxlength="1000" placeholder="Patient को जवाब लिखें"></textarea>
+                   <button type="button" data-answer="${escapeHtml(item._id)}">जवाब भेजें</button>`}
+        </article>`).join("") : "<p>अभी कोई सवाल नहीं है।";
+    const questionId = window.location.hash.match(/^#question-([a-f\d]{24})$/i)?.[1];
+    if (questionId) {
+        document.getElementById(`question-${questionId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+}
+
+function showNotification(title, body) {
+    if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body, icon: "/favicon.ico", tag: "admin-notification" });
+    }
+}
+
+async function load() {
+    try {
+        const date = encodeURIComponent(admin$("#admin-date").value);
+        const [appointments, payments, questions, feedback] = await Promise.all([
+            adminApi(`/api/admin/tokens?date=${date}`),
+            adminApi("/api/admin/payments"),
+            adminApi("/api/admin/questions"),
+            adminApi("/api/admin/feedback")
+        ]);
+        renderAppointments(appointments);
+        renderPayments(payments);
+        renderQuestions(questions);
+        renderFeedback(feedback);
+    } catch (error) {
+        admin$("#admin-message").textContent = error.message;
+    }
+}
+
+function initSocket() {
+    if (adminState.socket) return;
+    adminState.socket = io();
+    adminState.socket.on("connect", () => adminState.socket.emit("join-admin"));
+    adminState.socket.on("new-question", (data) => {
+        showNotification("नया सवाल आया", `${data.patientName || "Patient"}: ${data.question.slice(0, 50)}`);
+        load();
+    });
+    adminState.socket.on("payment-reference-submitted", (data) => {
+        showNotification("UPI payment verify करें", `${data.appointmentId}: ${data.paymentReference}`);
+        load();
+    });
+    adminState.socket.on("disconnect", () => {
+        setTimeout(initSocket, 5000);
+    });
+    adminState.socket.on("connect_error", (error) => {
+        console.error("Admin socket connection failed:", error.message);
+    });
+}
+
 admin$("#admin-date").value = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
-admin$("#admin-login").addEventListener("click", async () => { try { const d = await adminApi("/api/auth/login", { method: "POST", body: JSON.stringify({ phone: admin$("#admin-phone").value, password: admin$("#admin-password").value }) }); if (d.user.role !== "admin") throw new Error("यह admin account नहीं है।"); adminState.token = d.token; admin$("#admin-message").textContent = "Team login सफल।"; Notification.requestPermission().then(() => { initSocket(); load(); }); } catch (e) { admin$("#admin-message").textContent = e.message; } });
-admin$("#admin-refresh").addEventListener("click", load); admin$("#admin-date").addEventListener("change", load);
-admin$("#admin-questions").addEventListener("click", async (e) => { const button = e.target.closest("[data-answer]"); if (!button) return; const field = admin$(`[data-question="${button.dataset.answer}"]`); try { await adminApi(`/api/admin/questions/${button.dataset.answer}`, { method: "PATCH", body: JSON.stringify({ answer: field.value }) }); load(); } catch (error) { admin$("#admin-message").textContent = error.message; } });
+admin$("#admin-login").addEventListener("click", async () => {
+    try {
+        const data = await adminApi("/api/auth/login", {
+            method: "POST",
+            body: JSON.stringify({
+                phone: admin$("#admin-phone").value,
+                password: admin$("#admin-password").value
+            })
+        });
+        if (data.user.role !== "admin") throw new Error("यह admin account नहीं है।");
+        adminState.token = data.token;
+        admin$("#admin-message").textContent = "Team login सफल।";
+        if ("Notification" in window) {
+            Notification.requestPermission().finally(() => {
+                initSocket();
+                load();
+            });
+        } else {
+            initSocket();
+            load();
+        }
+    } catch (error) {
+        admin$("#admin-message").textContent = error.message;
+    }
+});
+
+admin$("#admin-refresh").addEventListener("click", load);
+admin$("#admin-date").addEventListener("change", load);
+admin$("#admin-payments").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-payment]");
+    if (!button) return;
+    button.disabled = true;
+    try {
+        const result = await adminApi(`/api/admin/tokens/${button.dataset.payment}/payment`, {
+            method: "PATCH",
+            body: JSON.stringify({ status: button.dataset.status })
+        });
+        admin$("#admin-message").textContent = result.message;
+        await load();
+    } catch (error) {
+        button.disabled = false;
+        admin$("#admin-message").textContent = error.message;
+    }
+});
+admin$("#admin-questions").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-answer]");
+    if (!button) return;
+    const field = admin$(`[data-question="${button.dataset.answer}"]`);
+    try {
+        await adminApi(`/api/admin/questions/${button.dataset.answer}`, {
+            method: "PATCH",
+            body: JSON.stringify({ answer: field.value })
+        });
+        await load();
+    } catch (error) {
+        admin$("#admin-message").textContent = error.message;
+    }
+});

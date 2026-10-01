@@ -65,6 +65,12 @@
             <div id="appointments"><p>Login के बाद आपके tokens दिखेंगे।</p></div>
         </section>
         <section class="card">
+            <h2>Appointment feedback</h2>
+            <p>Appointment पूरा होने के बाद doctor और clinic के अनुभव को rate करें। हर appointment पर एक feedback भेज सकते हैं।</p>
+            <div id="feedback-appointments"><p>अपने पूरे हुए appointments देखने के लिए login करें।</p></div>
+            <p id="feedback-message" class="message"></p>
+        </section>
+        <section class="card">
             <h2>Team से सवाल पूछें</h2>
             <p>Token, समय या booking से जुड़ा सवाल भेजें। Login जरूरी है।</p>
             <textarea id="support-question" maxlength="500" placeholder="जैसे: मेरा नंबर कब आएगा?"></textarea>
@@ -89,6 +95,6 @@
     </main>
     <footer class="site-footer"><a href="/admin.html">Team dashboard</a><a href="/doctor.html">Doctor dashboard</a></footer>
     <script src="/socket.io/socket.io.js"></script>
-    <script src="app.js?v=14"></script>
+    <script src="app.js?v=19"></script>
 </body>
 </html>

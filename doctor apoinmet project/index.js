@@ -13,6 +13,7 @@ const multer = require("multer");
 const nodemailer = require("nodemailer");
 const { cert, getApp, getApps, initializeApp } = require("firebase-admin/app");
 const { getAuth } = require("firebase-admin/auth");
+const QRCode = require("qrcode");
 
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -35,6 +36,7 @@ const emailTransporter = (process.env.SMTP_HOST && process.env.SMTP_USER && proc
         socketTimeout: 20000
     })
     : null;
+const SUPPORT_NOTIFICATION_EMAIL = String(process.env.SUPPORT_NOTIFICATION_EMAIL || "warmaa785@gmail.com").trim();
 
 const otpStore = new Map();
 function generateOTP() { return String(crypto.randomInt(100000, 1000000)); }
@@ -56,6 +58,24 @@ async function sendOTPEmail(email, otp, type) {
     } catch (e) {
         console.error("Email send failed:", e.message);
         return { success: false, reason: e.message };
+    }
+    async function sendSupportQuestionNotification({ patientName, question, createdAt, dashboardUrl }) {
+        if (!emailTransporter) return { success: false, reason: "SMTP email is not configured." };
+        try {
+            await emailTransporter.sendMail({
+                from: `"Sehat Bhabua" <${process.env.SMTP_USER}>`,
+                to: SUPPORT_NOTIFICATION_EMAIL,
+                subject: "नया patient question - Sehat Bhabua",
+                text: `नया सवाल आया है।\n\nPatient: ${patientName}\nसमय: ${new Intl.DateTimeFormat("en-IN", {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                    timeZone: "Asia/Kolkata"
+                }).format(createdAt)}\n\nसवाल:\n${question}\n\nजवाब देने के लिए admin dashboard खोलें (admin login जरूरी है):\n${dashboardUrl}\n\nयह notification है; इस email का reply app में answer के रूप में save नहीं होगा।`
+            });
+            return { success: true };
+        } catch (error) {
+            return { success: false, reason: error.message };
+        }
     }
 }
 async function parseGroqResponse(response) {
@@ -83,6 +103,8 @@ const GROQ_MODEL = process.env.GROQ_MODEL || "qwen/qwen3.8-27b";
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID;
 const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN;
 const TWILIO_PHONE_NUMBER = process.env.TWILIO_PHONE_NUMBER;
+const UPI_ID = String(process.env.UPI_ID || "").trim();
+const UPI_PAYEE_NAME = String(process.env.UPI_PAYEE_NAME || "Sehat Bhabua").trim();
 const validTwilioSender = /^\+[1-9]\d{7,14}$/.test(TWILIO_PHONE_NUMBER || "");
 let twilioClient = null;
 if (TWILIO_ACCOUNT_SID || TWILIO_AUTH_TOKEN || TWILIO_PHONE_NUMBER) {
@@ -98,41 +120,55 @@ if (TWILIO_ACCOUNT_SID || TWILIO_AUTH_TOKEN || TWILIO_PHONE_NUMBER) {
 }
 let firebaseAuth = null;
 let firebaseApp = null;
+let serviceAccount = null;
 try {
-    let serviceAccount = null;
     if (process.env.FIREBASE_SERVICE_ACCOUNT) {
         const account = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
         const privateKey = account.privateKey || account.private_key;
         serviceAccount = {
             projectId: account.projectId || account.project_id,
             clientEmail: account.clientEmail || account.client_email,
-            privateKey: privateKey?.replace(/\\n/g, "\n")
+            privateKey: typeof privateKey === "string" ? privateKey.replace(/\\n/g, "\n").trim() : ""
         };
     } else {
         const { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY } = process.env;
         if (FIREBASE_PROJECT_ID || FIREBASE_CLIENT_EMAIL || FIREBASE_PRIVATE_KEY) {
-            if (FIREBASE_PROJECT_ID && FIREBASE_CLIENT_EMAIL && FIREBASE_PRIVATE_KEY) {
-                serviceAccount = {
-                    projectId: FIREBASE_PROJECT_ID,
-                    clientEmail: FIREBASE_CLIENT_EMAIL,
-                    privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n")
-                };
-            } else {
-                console.warn("Firebase Admin credentials are incomplete; Firebase Phone Auth is disabled.");
+            serviceAccount = {
+                projectId: FIREBASE_PROJECT_ID,
+                clientEmail: FIREBASE_CLIENT_EMAIL,
+                privateKey: (FIREBASE_PRIVATE_KEY || "").replace(/\\n/g, "\n").trim()
+            };
+        }
+    }
+} catch {
+    console.warn("Firebase service-account JSON is invalid; Firebase Phone Auth is disabled. Check FIREBASE_SERVICE_ACCOUNT formatting.");
+}
+
+if (serviceAccount) {
+    if (!serviceAccount.projectId || !serviceAccount.clientEmail || !serviceAccount.privateKey) {
+        console.warn("Firebase Admin credentials are incomplete; Firebase Phone Auth is disabled.");
+    } else {
+        let privateKeyValid = false;
+        try {
+            crypto.createPrivateKey(serviceAccount.privateKey);
+            privateKeyValid = true;
+        } catch {
+            console.warn("Firebase private key is invalid or truncated; Firebase Phone Auth is disabled. Replace it with the complete private_key from the Firebase service-account JSON. Email OTP remains available.");
+        }
+        if (privateKeyValid) {
+            try {
+                firebaseApp = getApps().length
+                    ? getApp()
+                    : initializeApp({ credential: cert(serviceAccount) });
+                firebaseAuth = getAuth(firebaseApp);
+                console.log("Firebase Admin Phone Auth verification is enabled.");
+            } catch (error) {
+                console.error("Firebase Admin initialization failed; Firebase Phone Auth is disabled:", error.message);
             }
         }
     }
-    if (serviceAccount) {
-        firebaseApp = getApps().length
-            ? getApp()
-            : initializeApp({ credential: cert(serviceAccount) });
-        firebaseAuth = getAuth(firebaseApp);
-        console.log("Firebase Admin Phone Auth verification is enabled.");
-    } else {
-        console.log("Firebase Admin credentials are not configured; SMS OTP will use the configured provider.");
-    }
-} catch (error) {
-    console.error("Firebase Admin initialization failed; Firebase Phone Auth is disabled:", error.message);
+} else {
+    console.log("Firebase Admin credentials are not configured; SMS OTP will use the configured provider.");
 }
 
 if (!MONGODB_URI || !JWT_SECRET) throw new Error("MONGODB_URI and JWT_SECRET are required in a .env file.");
@@ -191,9 +227,11 @@ const tokenSchema = new mongoose.Schema({
     clinicId: { type: mongoose.Schema.Types.ObjectId, ref: "Doctor", required: true }, state: { type: String, required: true }, district: { type: String, required: true }, city: { type: String, required: true }, clinic: { type: String, required: true },
     tokenNumber: { type: Number, required: true }, visitDate: { type: String, required: true }, appointmentId: { type: String, unique: true, index: true },
     appointmentTime: String, bookedAtIndia: String,
-    paymentMethod: { type: String, enum: ["demo_cash", "demo_upi", "demo_card"], default: "demo_cash" },
-    paymentStatus: { type: String, enum: ["demo_paid"], default: "demo_paid" },
+    paymentMethod: { type: String, enum: ["upi_manual", "demo_cash", "demo_upi", "demo_card"], default: "upi_manual" },
+    paymentStatus: { type: String, enum: ["pending", "submitted", "confirmed", "failed", "demo_paid"], default: "pending" },
+    paymentAmount: { type: Number, min: 0 },
     paymentId: String,
+    paymentReference: { type: String, trim: true, maxlength: 80 },
     status: { type: String, enum: ["booked", "confirmed", "in_progress", "called", "completed", "cancelled", "no_show"], default: "booked" }
 }, { timestamps: true });
 tokenSchema.index({ doctor: 1, visitDate: 1, tokenNumber: 1 }, { unique: true });
@@ -206,11 +244,19 @@ const supportQuestionSchema = new mongoose.Schema({
     answer: { type: String, trim: true, maxlength: 1000, default: "" },
     status: { type: String, enum: ["open", "answered"], default: "open" }
 }, { timestamps: true });
+const feedbackSchema = new mongoose.Schema({
+    patient: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
+    doctor: { type: mongoose.Schema.Types.ObjectId, ref: "Doctor", required: true, index: true },
+    appointment: { type: mongoose.Schema.Types.ObjectId, ref: "Token", required: true, unique: true },
+    rating: { type: Number, required: true, min: 1, max: 5 },
+    comment: { type: String, trim: true, maxlength: 500, default: "" }
+}, { timestamps: true });
 const User = mongoose.model("User", userSchema);
 const Doctor = mongoose.model("Doctor", doctorSchema);
 const Token = mongoose.model("Token", tokenSchema);
 const DailyCounter = mongoose.model("DailyCounter", counterSchema);
 const SupportQuestion = mongoose.model("SupportQuestion", supportQuestionSchema);
+const Feedback = mongoose.model("Feedback", feedbackSchema);
 const resetRequests = new Map();
 
 async function ensureAdminAccount() {
@@ -432,22 +478,55 @@ app.get("/api/doctors", async (req, res) => {
         const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         filter.$or = [{ name: new RegExp(escapedSearch, "i") }, { specialty: new RegExp(escapedSearch, "i") }, { clinic: new RegExp(escapedSearch, "i") }];
     }
-    res.json(await Doctor.find(filter).sort({ district: 1, name: 1 }));
+    const doctors = await Doctor.find(filter).sort({ district: 1, name: 1 });
+    const ratings = await Feedback.aggregate([
+        { $match: { doctor: { $in: doctors.map((doctor) => doctor._id) } } },
+        { $group: { _id: "$doctor", averageRating: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+    ]);
+    const ratingsByDoctor = new Map(ratings.map((rating) => [rating._id.toString(), rating]));
+    res.json(doctors.map((doctor) => {
+        const rating = ratingsByDoctor.get(doctor._id.toString());
+        return {
+            ...doctor.toObject(),
+            averageRating: rating ? Math.round(rating.averageRating * 10) / 10 : null,
+            ratingCount: rating?.ratingCount || 0
+        };
+    }));
 });
 app.get("/api/doctors/:id/status", async (req, res) => {
     const doctor = await Doctor.findOne({ _id: req.params.id, active: true }); if (!doctor) return res.status(404).json({ message: "Doctor not found." });
+    const rating = await Feedback.aggregate([
+        { $match: { doctor: doctor._id } },
+        { $group: { _id: "$doctor", averageRating: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+    ]);
     const visitDate = req.query.date || today(); const tokens = await Token.find({ doctor: doctor._id, visitDate }).sort({ tokenNumber: 1 });
     const active = tokens.filter((t) => !["cancelled", "no_show", "completed"].includes(t.status));
     const current = tokens.find((t) => ["in_progress", "called"].includes(t.status));
     const occupied = new Set(tokens.filter((t) => t.status !== "cancelled").map((t) => t.tokenNumber));
-    res.json({ doctor, total: doctor.tokenLimit, booked: active.length, available: Math.max(0, doctor.tokenLimit - active.length), availableTokens: Array.from({ length: doctor.tokenLimit }, (_, i) => i + 1).filter((n) => !occupied.has(n)), bookedToday: active.length, currentToken: current?.tokenNumber || 0, estimatedMinutes: active.length * doctor.averageMinutes, tokens: tokens.map((t) => ({ tokenNumber: t.tokenNumber, status: t.status, appointmentTime: t.appointmentTime })) });
+    res.json({ doctor, averageRating: rating.length ? Math.round(rating[0].averageRating * 10) / 10 : null, ratingCount: rating[0]?.ratingCount || 0, total: doctor.tokenLimit, booked: active.length, available: Math.max(0, doctor.tokenLimit - active.length), availableTokens: Array.from({ length: doctor.tokenLimit }, (_, i) => i + 1).filter((n) => !occupied.has(n)), bookedToday: active.length, currentToken: current?.tokenNumber || 0, estimatedMinutes: active.length * doctor.averageMinutes, tokens: tokens.map((t) => ({ tokenNumber: t.tokenNumber, status: t.status, appointmentTime: t.appointmentTime })) });
 });
+
+async function createManualUpiPayment(appointmentId, amount) {
+    if (!amount || !UPI_ID) return null;
+    const upiUrl = `upi://pay?${new URLSearchParams({
+        pa: UPI_ID,
+        pn: UPI_PAYEE_NAME,
+        am: amount.toFixed(2),
+        cu: "INR",
+        tn: `Appointment ${appointmentId}`
+    })}`;
+    const qrDataUrl = await QRCode.toDataURL(upiUrl, { errorCorrectionLevel: "M", margin: 1, width: 240 });
+    return { upiId: UPI_ID, payeeName: UPI_PAYEE_NAME, amount, upiUrl, qrDataUrl };
+}
 
 app.post("/api/tokens", auth("patient"), async (req, res) => {
     try {
-        const { doctorId, visitDate, preferredToken, paymentMethod = "demo_cash", patientName, patientAge } = req.body; if (!doctorId || !validDate(visitDate)) return res.status(400).json({ message: "A valid doctor and today or future date are required." });
-        if (!["demo_cash", "demo_upi", "demo_card"].includes(paymentMethod)) return res.status(400).json({ message: "Please choose a valid demo payment method." });
+        const { doctorId, visitDate, preferredToken, patientName, patientAge } = req.body;
+        if (!doctorId || !validDate(visitDate)) return res.status(400).json({ message: "A valid doctor and today or future date are required." });
         const doctor = await Doctor.findOne({ _id: doctorId, active: true }); if (!doctor) return res.status(404).json({ message: "Doctor not found." });
+        const amount = Number(doctor.fee || 0);
+        if (amount > 0 && !UPI_ID) return res.status(503).json({ message: "UPI payment is not configured yet. Add your UPI_ID in the server .env file." });
+        if (amount > 0 && !/^[\w.-]{2,256}@[A-Za-z0-9.-]{2,64}$/.test(UPI_ID)) return res.status(503).json({ message: "UPI_ID in the server configuration is not a valid UPI ID." });
         const day = new Date(`${visitDate}T12:00:00Z`).toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" }); if (doctor.availableDays?.length && !doctor.availableDays.includes(day)) return res.status(409).json({ message: `Doctor is not available on ${day}.` });
         const patient = await User.findById(req.user.id).select("name phone"); if (!patient) return res.status(401).json({ message: "Patient account not found." });
         let number;
@@ -465,6 +544,9 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
             number = counter.nextToken - 1;
         }
         const finalPatientName = patientName || patient.name;
+        const appointmentId = `APT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+        const paymentStatus = amount > 0 ? "pending" : "confirmed";
+        const payment = await createManualUpiPayment(appointmentId, amount);
         const appointment = await Token.create({
             doctor: doctor._id,
             patient: req.user.id,
@@ -478,21 +560,101 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
             clinic: doctor.clinic,
             tokenNumber: number,
             visitDate,
-            appointmentId: `APT-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+            appointmentId,
             appointmentTime: appointmentTime(doctor, number), bookedAtIndia: indiaDateTime(),
-            paymentMethod, paymentStatus: "demo_paid", paymentId: `DEMO-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
+            paymentMethod: "upi_manual",
+            paymentStatus,
+            paymentAmount: amount,
+            paymentId: amount > 0 ? undefined : "NO_PAYMENT_REQUIRED"
         });
-        if (patient.email) {
-            const otp = generateOTP();
-            const key = `appointment:${patient.email}`;
-            otpStore.set(key, { otp, expires: Date.now() + 10 * 60 * 1000, attempts: 0, lastRequest: Date.now(), userId: patient._id.toString(), appointmentId: appointment._id.toString() });
-            await sendOTPEmail(patient.email, otp, "appointment");
-        }
-        res.status(201).json({ appointment, token: tokenId(finalPatientName, number), message: "Appointment confirmed. OTP sent to email for verification." });
-    } catch (e) { if (e.code === 11000) return res.status(409).json({ message: "This appointment or token was just booked. Please refresh and try again." }); res.status(500).json({ message: "Could not book the token." }); }
+        res.status(201).json({
+            appointment,
+            token: tokenId(finalPatientName, number),
+            payment: payment || { upiId: UPI_ID, payeeName: UPI_PAYEE_NAME, amount, upiUrl: null, qrDataUrl: null },
+            message: amount > 0
+                ? "Token book हो गया। UPI payment करके transaction reference भेजें; team payment verify करेगी।"
+                : "यह appointment free है; कोई payment जरूरी नहीं।"
+        });
+    } catch (e) {
+        if (e.code === 11000) return res.status(409).json({ message: "This appointment or token was just booked. Please refresh and try again." });
+        console.error("Appointment booking failed:", e.message);
+        res.status(500).json({ message: "Could not book the token. Please try again or contact the team." });
+    }
+});
+app.post("/api/tokens/:id/payment-reference", auth("patient"), async (req, res) => {
+    const reference = String(req.body.reference || "").trim();
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: "Appointment ID अमान्य है।" });
+    if (!/^[A-Za-z0-9-]{8,80}$/.test(reference)) {
+        return res.status(400).json({ message: "UPI transaction reference 8 से 80 letters/numbers में डालें।" });
+    }
+    const appointment = await Token.findOne({ _id: req.params.id, patient: req.user.id });
+    if (!appointment) return res.status(404).json({ message: "Appointment नहीं मिला।" });
+    if (appointment.paymentMethod !== "upi_manual" || appointment.paymentStatus !== "pending") {
+        return res.status(409).json({ message: "इस appointment के लिए payment reference पहले ही भेजा जा चुका है या payment जरूरी नहीं है।" });
+    }
+    appointment.paymentReference = reference;
+    appointment.paymentStatus = "submitted";
+    await appointment.save();
+    io.to("admins").emit("payment-reference-submitted", {
+        appointmentId: appointment.appointmentId,
+        paymentReference: reference,
+        submittedAt: new Date()
+    });
+    res.json({ message: "Payment reference team को भेज दिया गया है। Payment verify होने तक status pending रहेगा।", paymentStatus: appointment.paymentStatus });
 });
 app.post("/api/patients/location", auth("patient"), async (req, res) => { const { consent, latitude, longitude } = req.body; if (!consent) { await User.findByIdAndUpdate(req.user.id, { "location.consent": false }); return res.json({ consent: false }); } if (!Number.isFinite(latitude) || !Number.isFinite(longitude) || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return res.status(400).json({ message: "Valid location coordinates are required." }); await User.findByIdAndUpdate(req.user.id, { "location.consent": true, "location.latitude": latitude, "location.longitude": longitude, "location.capturedAt": new Date() }); res.json({ consent: true }); });
-app.get("/api/tokens/my", auth("patient"), async (req, res) => { const appointments = await Token.find({ patient: req.user.id }).populate("doctor").populate("patient", "name").sort({ visitDate: -1, tokenNumber: 1 }); res.json(appointments.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) }))); });
+app.get("/api/tokens/my", auth("patient"), async (req, res) => {
+    const appointments = await Token.find({ patient: req.user.id }).populate("doctor").populate("patient", "name").sort({ visitDate: -1, tokenNumber: 1 });
+    res.json(await Promise.all(appointments.map(async (appointment) => {
+        const item = appointment.toObject();
+        return {
+            ...item,
+            tokenId: tokenId(appointment.patient?.name, appointment.tokenNumber),
+            payment: appointment.paymentStatus === "pending"
+                ? await createManualUpiPayment(appointment.appointmentId, Number(appointment.paymentAmount ?? appointment.doctor?.fee ?? 0))
+                : null
+        };
+    })));
+});
+app.get("/api/feedback/my", auth("patient"), async (req, res) => {
+    const appointments = await Token.find({ patient: req.user.id, status: "completed" })
+        .populate("doctor", "name clinic")
+        .sort({ visitDate: -1, tokenNumber: 1 });
+    const feedback = await Feedback.find({ patient: req.user.id }).lean();
+    const feedbackByAppointment = new Map(feedback.map((item) => [item.appointment.toString(), item]));
+    res.json(appointments.map((appointment) => ({
+        appointmentId: appointment._id,
+        appointmentCode: appointment.appointmentId,
+        doctor: appointment.doctor?.name || "Doctor",
+        clinic: appointment.doctor?.clinic || appointment.clinic,
+        visitDate: appointment.visitDate,
+        tokenNumber: appointment.tokenNumber,
+        feedback: feedbackByAppointment.get(appointment._id.toString()) || null
+    })));
+});
+app.post("/api/feedback", auth("patient"), async (req, res) => {
+    const appointmentId = String(req.body.appointmentId || "");
+    const rating = Number(req.body.rating);
+    const comment = String(req.body.comment || "").trim();
+    if (!mongoose.isValidObjectId(appointmentId)) return res.status(400).json({ message: "Appointment चुनें।" });
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) return res.status(400).json({ message: "Rating 1 से 5 के बीच चुनें।" });
+    if (comment.length > 500) return res.status(400).json({ message: "Feedback 500 अक्षरों से कम रखें।" });
+    const appointment = await Token.findOne({ _id: appointmentId, patient: req.user.id, status: "completed" });
+    if (!appointment) return res.status(404).json({ message: "Feedback केवल पूरे हो चुके अपने appointment के लिए भेज सकते हैं।" });
+    try {
+        const feedback = await Feedback.create({
+            patient: req.user.id,
+            doctor: appointment.doctor,
+            appointment: appointment._id,
+            rating,
+            comment
+        });
+        res.status(201).json({ message: "धन्यवाद! आपका feedback भेज दिया गया है।", feedback });
+    } catch (error) {
+        if (error.code === 11000) return res.status(409).json({ message: "इस appointment का feedback पहले ही भेजा जा चुका है।" });
+        throw error;
+    }
+});
 app.post("/api/assistant", auth(), async (req, res) => {
     if (!GROQ_API_KEY) return res.status(503).json({ message: "AI assistant अभी configure नहीं है। Admin से GROQ_API_KEY set करने को कहें।" });
     const question = String(req.body.question || "").trim();
@@ -624,7 +786,26 @@ app.post("/api/support/questions", auth(), async (req, res) => {
         question: populated.question,
         createdAt: populated.createdAt
     });
-    res.status(201).json({ id: item._id, message: "आपका सवाल team को भेज दिया गया है।" });
+    const appBaseUrl = String(process.env.APP_BASE_URL || process.env.FRONTEND_URL || `http://localhost:${PORT}`).trim().replace(/\/+$/, "");
+    const notification = await sendSupportQuestionNotification({
+        patientName: populated.patient?.name || "Patient",
+        question: populated.question,
+        createdAt: populated.createdAt || item.createdAt,
+        dashboardUrl: `${appBaseUrl}/admin.html#question-${item._id}`
+    });
+    if (!notification.success) {
+        console.error("Support question email notification failed:", notification.reason);
+        return res.status(201).json({
+            id: item._id,
+            notificationSent: false,
+            message: "आपका सवाल team dashboard में भेज दिया गया है, लेकिन Gmail notification नहीं भेजा जा सका। Admin email/SMTP settings जाँचें।"
+        });
+    }
+    res.status(201).json({
+        id: item._id,
+        notificationSent: true,
+        message: "आपका सवाल team dashboard में भेजा गया है और Gmail पर notification भेज दिया गया है।"
+    });
 });
 app.get("/api/support/questions/my", auth(), async (req, res) => {
     const items = await SupportQuestion.find({ patient: req.user.id }).sort({ createdAt: -1 }).limit(20);
@@ -633,12 +814,103 @@ app.get("/api/support/questions/my", auth(), async (req, res) => {
 
 app.get("/api/doctor/tokens", auth("doctor"), async (req, res) => { const doctor = await Doctor.findOne({ user: req.user.id }); if (!doctor) return res.status(404).json({ message: "Doctor profile not found." }); const visitDate = req.query.date || today(); const a = await Token.find({ doctor: doctor._id, visitDate }).populate("patient", "name phone").sort({ tokenNumber: 1 }); res.json(a.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) }))); });
 app.get("/api/doctor/dashboard", auth("doctor"), async (req, res) => { const doctor = await Doctor.findOne({ user: req.user.id }); if (!doctor) return res.status(404).json({ message: "Doctor profile not found." }); const date = req.query.date || today(); const tokens = await Token.find({ doctor: doctor._id, visitDate: date }).populate("patient", "name phone").sort({ tokenNumber: 1 }); res.json({ doctor, date, summary: { total: doctor.tokenLimit, booked: tokens.filter((x) => !["cancelled", "no_show"].includes(x.status)).length, completed: tokens.filter((x) => x.status === "completed").length, current: tokens.find((x) => ["called", "in_progress"].includes(x.status))?.tokenNumber || 0 }, tokens: tokens.map((x) => ({ ...x.toObject(), tokenId: tokenId(x.patient?.name, x.tokenNumber) })) }); });
+app.get("/api/doctor/feedback", auth("doctor"), async (req, res) => {
+    const doctor = await Doctor.findOne({ user: req.user.id }).select("_id");
+    if (!doctor) return res.status(404).json({ message: "Doctor profile not found." });
+    const [summary] = await Feedback.aggregate([
+        { $match: { doctor: doctor._id } },
+        { $group: { _id: "$doctor", averageRating: { $avg: "$rating" }, ratingCount: { $sum: 1 } } }
+    ]);
+    const items = await Feedback.find({ doctor: doctor._id })
+        .select("rating comment createdAt")
+        .sort({ createdAt: -1 })
+        .limit(100)
+        .lean();
+    res.json({
+        averageRating: summary ? Math.round(summary.averageRating * 10) / 10 : null,
+        ratingCount: summary?.ratingCount || 0,
+        feedback: items
+    });
+});
 app.patch("/api/doctor/tokens/:id", auth("doctor"), async (req, res) => { const doctor = await Doctor.findOne({ user: req.user.id }); const allowed = ["booked", "confirmed", "in_progress", "called", "completed", "cancelled", "no_show"]; if (!allowed.includes(req.body.status)) return res.status(400).json({ message: "Invalid token status." }); const a = await Token.findOneAndUpdate({ _id: req.params.id, doctor: doctor?._id }, { status: req.body.status }, { new: true, runValidators: true }); if (!a) return res.status(404).json({ message: "Token not found." }); res.json(a); });
 app.post("/api/doctor/next", auth("doctor"), async (req, res) => { const doctor = await Doctor.findOne({ user: req.user.id }); const date = req.body.date || today(); const current = await Token.findOneAndUpdate({ doctor: doctor?._id, visitDate: date, status: { $in: ["booked", "confirmed"] } }, { status: "in_progress" }, { sort: { tokenNumber: 1 }, new: true }); if (!current) return res.status(404).json({ message: "No waiting token." }); res.json(current); });
-app.get("/api/admin/tokens", auth("admin"), async (req, res) => { const filter = req.query.date ? { visitDate: req.query.date } : {}; const a = await Token.find(filter).populate("patient", "name phone location").populate("doctor", "name clinic district").sort({ visitDate: -1, tokenNumber: 1 }); res.json(a.map((x) => ({ id: x._id, patientId: x.patient?._id, patientName: x.patientName || x.patient?.name, patientPhone: x.patientPhone || x.patient?.phone, phone: x.patientPhone || x.patient?.phone, location: x.patient?.location?.consent ? x.patient.location : null, doctor: x.doctor?.name, clinic: x.doctor?.clinic, district: x.doctor?.district, tokenNumber: x.tokenNumber, tokenId: tokenId(x.patientName || x.patient?.name, x.tokenNumber), appointmentId: x.appointmentId, appointmentTime: x.appointmentTime, visitDate: x.visitDate, createdAt: x.createdAt, bookedAtIndia: x.bookedAtIndia, paymentMethod: x.paymentMethod, paymentStatus: x.paymentStatus, paymentId: x.paymentId, status: x.status }))); });
+app.get("/api/admin/tokens", auth("admin"), async (req, res) => {
+    const filter = req.query.date ? { visitDate: req.query.date } : {};
+    const appointments = await Token.find(filter)
+        .populate("patient", "name phone location")
+        .populate("doctor", "name clinic district")
+        .sort({ visitDate: -1, tokenNumber: 1 });
+    res.json(appointments.map((appointment) => ({
+        id: appointment._id,
+        patientId: appointment.patient?._id,
+        patientName: appointment.patientName || appointment.patient?.name,
+        patientPhone: appointment.patientPhone || appointment.patient?.phone,
+        phone: appointment.patientPhone || appointment.patient?.phone,
+        location: appointment.patient?.location?.consent ? appointment.patient.location : null,
+        doctor: appointment.doctor?.name,
+        clinic: appointment.doctor?.clinic,
+        district: appointment.doctor?.district,
+        tokenNumber: appointment.tokenNumber,
+        tokenId: tokenId(appointment.patientName || appointment.patient?.name, appointment.tokenNumber),
+        appointmentId: appointment.appointmentId,
+        appointmentTime: appointment.appointmentTime,
+        visitDate: appointment.visitDate,
+        createdAt: appointment.createdAt,
+        bookedAtIndia: appointment.bookedAtIndia,
+        fee: appointment.paymentAmount ?? appointment.doctor?.fee ?? 0,
+        paymentMethod: appointment.paymentMethod,
+        paymentStatus: appointment.paymentStatus,
+        paymentId: appointment.paymentId,
+        paymentReference: appointment.paymentReference,
+        status: appointment.status
+    })));
+});
+app.get("/api/admin/payments", auth("admin"), async (req, res) => {
+    const payments = await Token.find({ paymentMethod: "upi_manual", paymentStatus: "submitted" })
+        .populate("patient", "name phone")
+        .populate("doctor", "name clinic fee")
+        .sort({ updatedAt: 1 });
+    res.json(payments.map((appointment) => ({
+        id: appointment._id,
+        patientName: appointment.patientName || appointment.patient?.name,
+        patientPhone: appointment.patientPhone || appointment.patient?.phone,
+        doctor: appointment.doctor?.name,
+        clinic: appointment.doctor?.clinic,
+        tokenNumber: appointment.tokenNumber,
+        appointmentId: appointment.appointmentId,
+        visitDate: appointment.visitDate,
+        fee: appointment.paymentAmount ?? appointment.doctor?.fee ?? 0,
+        paymentReference: appointment.paymentReference
+    })));
+});
+app.patch("/api/admin/tokens/:id/payment", auth("admin"), async (req, res) => {
+    const paymentStatus = String(req.body.status || "");
+    if (!mongoose.isValidObjectId(req.params.id)) return res.status(400).json({ message: "Appointment ID is invalid." });
+    if (!["confirmed", "failed"].includes(paymentStatus)) return res.status(400).json({ message: "Payment status must be confirmed or failed." });
+    const appointment = await Token.findOneAndUpdate(
+        { _id: req.params.id, paymentMethod: "upi_manual", paymentStatus: "submitted" },
+        { paymentStatus },
+        { new: true, runValidators: true }
+    );
+    if (!appointment) return res.status(404).json({ message: "No submitted UPI payment was found for this appointment." });
+    io.to(`patient-${appointment.patient}`).emit("payment-status-updated", {
+        appointmentId: appointment.appointmentId,
+        paymentStatus
+    });
+    res.json({ message: paymentStatus === "confirmed" ? "Payment verified and confirmed." : "Payment marked as not verified.", paymentStatus });
+});
 app.get("/api/admin/dashboard", auth("admin"), async (req, res) => { const date = req.query.date || today(); const tokens = await Token.find({ visitDate: date }).populate("patient", "name phone").populate("doctor", "name clinic district").sort({ tokenNumber: 1 }); res.json({ date, total: tokens.length, byStatus: tokens.reduce((o, t) => { o[t.status] = (o[t.status] || 0) + 1; return o; }, {}), tokens }); });
 app.get("/api/admin/questions", auth("admin"), async (req, res) => {
     const items = await SupportQuestion.find().populate("patient", "name phone").sort({ status: 1, createdAt: -1 }).limit(100);
+    res.json(items);
+});
+app.get("/api/admin/feedback", auth("admin"), async (req, res) => {
+    const items = await Feedback.find()
+        .populate("patient", "name phone email")
+        .populate("doctor", "name clinic")
+        .populate("appointment", "appointmentId visitDate tokenNumber")
+        .sort({ createdAt: -1 })
+        .limit(200);
     res.json(items);
 });
 app.patch("/api/admin/questions/:id", auth("admin"), async (req, res) => {
@@ -670,7 +942,10 @@ app.get("/api/health", (req, res) => res.json({
     district: "Kaimur",
     providers: {
         emailOtpConfigured: Boolean(emailTransporter),
+        supportQuestionEmailConfigured: Boolean(emailTransporter && SUPPORT_NOTIFICATION_EMAIL),
+        firebasePhoneAuthConfigured: Boolean(firebaseAuth),
         smsOtpEnabled: false,
+        manualUpiConfigured: /^[\w.-]{2,256}@[A-Za-z0-9.-]{2,64}$/.test(UPI_ID),
         ai: Boolean(GROQ_API_KEY)
     }
 }));
