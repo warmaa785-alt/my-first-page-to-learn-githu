@@ -59,23 +59,23 @@ async function sendOTPEmail(email, otp, type) {
         console.error("Email send failed:", e.message);
         return { success: false, reason: e.message };
     }
-    async function sendSupportQuestionNotification({ patientName, question, createdAt, dashboardUrl }) {
-        if (!emailTransporter) return { success: false, reason: "SMTP email is not configured." };
-        try {
-            await emailTransporter.sendMail({
-                from: `"Sehat Bhabua" <${process.env.SMTP_USER}>`,
-                to: SUPPORT_NOTIFICATION_EMAIL,
-                subject: "नया patient question - Sehat Bhabua",
-                text: `नया सवाल आया है।\n\nPatient: ${patientName}\nसमय: ${new Intl.DateTimeFormat("en-IN", {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                    timeZone: "Asia/Kolkata"
-                }).format(createdAt)}\n\nसवाल:\n${question}\n\nजवाब देने के लिए admin dashboard खोलें (admin login जरूरी है):\n${dashboardUrl}\n\nयह notification है; इस email का reply app में answer के रूप में save नहीं होगा।`
-            });
-            return { success: true };
-        } catch (error) {
-            return { success: false, reason: error.message };
-        }
+}
+async function sendSupportQuestionNotification({ patientName, question, createdAt, dashboardUrl }) {
+    if (!emailTransporter) return { success: false, reason: "SMTP email is not configured." };
+    try {
+        await emailTransporter.sendMail({
+            from: `"Sehat Bhabua" <${process.env.SMTP_USER}>`,
+            to: SUPPORT_NOTIFICATION_EMAIL,
+            subject: "नया patient question - Sehat Bhabua",
+            text: `नया सवाल आया है।\n\nPatient: ${patientName}\nसमय: ${new Intl.DateTimeFormat("en-IN", {
+                dateStyle: "medium",
+                timeStyle: "short",
+                timeZone: "Asia/Kolkata"
+            }).format(createdAt)}\n\nसवाल:\n${question}\n\nजवाब देने के लिए admin dashboard खोलें (admin login जरूरी है):\n${dashboardUrl}\n\nयह notification है; इस email का reply app में answer के रूप में save नहीं होगा।`
+        });
+        return { success: true };
+    } catch (error) {
+        return { success: false, reason: error.message };
     }
 }
 async function parseGroqResponse(response) {

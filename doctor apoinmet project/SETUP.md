@@ -76,7 +76,7 @@ The repository includes a `render.yaml` Blueprint configuration. Before deployin
 2. In MongoDB Atlas, create a new database user and rotate any password that was previously shared.
 3. Add the Render outbound access rule required for the demo database (Atlas `0.0.0.0/0` is convenient for a demo but should be restricted for production).
 4. In Render, choose **New > Blueprint**, select the GitHub repository, and apply `render.yaml`.
-5. Set the generated service's `MONGODB_URI` to the Atlas connection string for the `bhabua_token` database. Also set `ADMIN_PHONE` and a strong `ADMIN_PASSWORD`.
+5. Set the generated service's `MONGODB_URI` to the Atlas connection string for the `bhabua_token` database. Also set `ADMIN_PHONE` and a strong `ADMIN_PASSWORD`. For patient email OTP, set `SMTP_USER` to the Gmail address that sends messages and `SMTP_PASS` to that account's 16-character Google App Password (not its normal Gmail password). The Blueprint sets `SMTP_HOST=smtp.gmail.com` and `SMTP_PORT=587`; after adding the secret values, sync/redeploy the Blueprint so the running service picks them up. Never commit these credentials or put them in browser code.
 6. Wait for the deploy to become live, then open the generated `https://...onrender.com` URL.
 7. Run the seed command once against Atlas from a trusted local terminal:
 
