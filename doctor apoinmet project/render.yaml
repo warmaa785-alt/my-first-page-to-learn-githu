@@ -24,7 +24,7 @@ services:
         sync: false
       - key: RESEND_FROM_EMAIL
         sync: false
-      - key: GEMINI_API_KEY
+      - key: GROQ_API_KEY
         sync: false
-      - key: GEMINI_MODEL
-        value: gemini-2.0-flash
+      - key: GROQ_MODEL
+        value: qwen/qwen3.8-27b

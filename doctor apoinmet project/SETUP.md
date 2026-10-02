@@ -57,9 +57,10 @@ form stores questions in MongoDB; the admin can answer them from
 `/admin.html`, and the patient's answer appears after refreshing the app.
 
 The **AI सहायक** answers patient-specific token/appointment questions and
-general app or clinic-process questions. It uses Gemini on the server and the
+general app or clinic-process questions. It uses Groq on the server and the
 browser's Hindi speech features to accept voice input and read answers aloud.
-Set `GEMINI_API_KEY` as a secret environment variable in Render; never put the
+Set `GROQ_API_KEY` as a secret environment variable in Render; the server uses
+`GROQ_MODEL` (default `qwen/qwen3.8-27b`). Never put the
 key in browser JavaScript or commit it. The assistant is not a doctor and must
 not be used for diagnosis, prescriptions, or emergencies.
 
@@ -102,4 +103,4 @@ The repository includes a `render.yaml` Blueprint configuration. Before deployin
    Atlas URI before testing doctor accounts; otherwise the deployed database
    will not contain the seeded doctor users.
 
-Render uses `/api/health` as the health check. After configuring UPI, check this endpoint's `manualUpiConfigured` field; it should be `true`. After configuring Resend, check its `emailOtpConfigured` field; it should also be `true`. Free services may sleep when idle, so the first request can take longer during a demo.
+Render uses `/api/health` as the health check. After configuring UPI, check this endpoint's `manualUpiConfigured` field; it should be `true`. Check `aiConfigured` for the Groq key and `emailOtpConfigured` for Resend; both should be `true`. Free services may sleep when idle, so the first request can take longer during a demo.

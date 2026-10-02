@@ -160,7 +160,11 @@ async function parseGroqResponse(response) {
     }
     if (!response.ok) {
         const detail = data?.error?.message || data?.message || `HTTP ${response.status}`;
-        throw new Error(String(detail).replace(/[\r\n]/g, " ").slice(0, 240));
+        const safeDetail = String(detail).replace(/[\r\n]/g, " ").slice(0, 240);
+        if (response.status === 401) throw new Error("Groq API key अमान्य या expire है। Render में GROQ_API_KEY जाँचें।");
+        if (response.status === 403) throw new Error("Groq ने इस API key/model की अनुमति नहीं दी। Groq account और GROQ_MODEL जाँचें।");
+        if (response.status === 429) throw new Error("Groq की rate limit या quota पूरी हो गई है। थोड़ी देर बाद फिर कोशिश करें या Groq plan जाँचें।");
+        throw new Error(`Groq HTTP ${response.status}: ${safeDetail}`);
     }
     return data;
 }
@@ -585,14 +589,16 @@ app.get("/api/doctors/:id/status", async (req, res) => {
 
 async function createManualUpiPayment(appointmentId, amount) {
     if (!amount || !UPI_ID) return null;
-    const upiUrl = `upi://pay?${new URLSearchParams({
+    const params = {
         pa: UPI_ID,
         pn: UPI_PAYEE_NAME,
-        tr: appointmentId,
         am: amount.toFixed(2),
         cu: "INR",
-        tn: appointmentId
-    })}`;
+        tn: "Doctor appointment"
+    };
+    const upiUrl = `upi://pay?${Object.entries(params)
+        .map(([key, value]) => `${key}=${encodeURIComponent(value)}`)
+        .join("&")}`;
     const qrDataUrl = await QRCode.toDataURL(upiUrl, { errorCorrectionLevel: "M", margin: 1, width: 240 });
     return { upiId: UPI_ID, payeeName: UPI_PAYEE_NAME, amount, upiUrl, qrDataUrl };
 }
@@ -1227,7 +1233,9 @@ app.get("/api/health", (req, res) => res.json({
         firebasePhoneAuthConfigured: Boolean(firebaseAuth),
         smsOtpEnabled: false,
         manualUpiConfigured: /^[\w.-]{2,256}@[A-Za-z0-9.-]{2,64}$/.test(UPI_ID),
-        ai: Boolean(GROQ_API_KEY)
+        ai: Boolean(GROQ_API_KEY),
+        aiConfigured: Boolean(GROQ_API_KEY),
+        aiModel: GROQ_MODEL
     }
 }));
 app.get("*", (req, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
