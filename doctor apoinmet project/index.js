@@ -588,9 +588,10 @@ async function createManualUpiPayment(appointmentId, amount) {
     const upiUrl = `upi://pay?${new URLSearchParams({
         pa: UPI_ID,
         pn: UPI_PAYEE_NAME,
+        tr: appointmentId,
         am: amount.toFixed(2),
         cu: "INR",
-        tn: `Appointment ${appointmentId}`
+        tn: appointmentId
     })}`;
     const qrDataUrl = await QRCode.toDataURL(upiUrl, { errorCorrectionLevel: "M", margin: 1, width: 240 });
     return { upiId: UPI_ID, payeeName: UPI_PAYEE_NAME, amount, upiUrl, qrDataUrl };
@@ -719,9 +720,18 @@ app.post("/api/tokens", auth("patient"), async (req, res) => {
                 ? tokenId(appointment.patientName, appointment.tokenNumber)
                 : null
         }));
+        const responseAppointments = appointments.map((appointment) => {
+            const item = appointment.toObject();
+            if (paymentStatus !== "confirmed") {
+                delete item.slotNumber;
+                delete item.tokenNumber;
+                delete item.appointmentTime;
+            }
+            return item;
+        });
         res.status(201).json({
-            appointment: appointments[0],
-            appointments,
+            appointment: responseAppointments[0],
+            appointments: responseAppointments,
             tokens: tokenList,
             token: tokenList[0]?.token || null,
             payment: payment || { upiId: UPI_ID, payeeName: UPI_PAYEE_NAME, amount, upiUrl: null, qrDataUrl: null },
@@ -787,9 +797,17 @@ app.get("/api/tokens/my", auth("patient"), async (req, res) => {
     res.json(await Promise.all(appointments.map(async (appointment) => {
         const item = appointment.toObject();
         const groupSize = appointment.paymentGroupId ? groupSizes.get(appointment.paymentGroupId) || 1 : 1;
+        const paymentConfirmed = appointment.paymentStatus === "confirmed" || appointment.paymentStatus === "demo_paid";
+        if (!paymentConfirmed) {
+            delete item.slotNumber;
+            delete item.tokenNumber;
+            delete item.appointmentTime;
+        }
         return {
             ...item,
-            tokenId: tokenId(appointment.patientName || appointment.patient?.name, appointment.tokenNumber),
+            tokenId: paymentConfirmed && Number.isInteger(appointment.tokenNumber)
+                ? tokenId(appointment.patientName || appointment.patient?.name, appointment.tokenNumber)
+                : null,
             payment: appointment.paymentStatus === "pending"
                 ? await createManualUpiPayment(
                     appointment.paymentGroupId || appointment.appointmentId,

@@ -85,7 +85,7 @@ The repository includes a `render.yaml` Blueprint configuration. Before deployin
 2. In MongoDB Atlas, create a new database user and rotate any password that was previously shared.
 3. Add the Render outbound access rule required for the demo database (Atlas `0.0.0.0/0` is convenient for a demo but should be restricted for production).
 4. In Render, choose **New > Blueprint**, select the GitHub repository, and apply `render.yaml`.
-5. Set the generated service's `MONGODB_URI` to the Atlas connection string for the `bhabua_token` database. Also set `ADMIN_PHONE` and a strong `ADMIN_PASSWORD`. For email OTP and question notifications, set `SMTP_USER` to the Gmail address that sends messages and `SMTP_PASS` to that account's 16-character Google App Password (not its normal Gmail password). The Blueprint uses Gmail SMTP over port `465`; sync/redeploy the Blueprint after adding the credentials. Never commit these credentials or put them in browser code.
+5. Set the generated service's `MONGODB_URI` to the Atlas connection string for the `bhabua_token` database. Also set `ADMIN_PHONE`, a strong `ADMIN_PASSWORD`, and the real `UPI_ID` and `UPI_PAYEE_NAME` in Render's environment settings. The local `.env` file is not uploaded to Render. For email OTP and question notifications, set `EMAIL_PROVIDER=resend`, `RESEND_API_KEY` to a valid Resend API key, and `RESEND_FROM_EMAIL` to a sender permitted by Resend. Resend's `onboarding@resend.dev` sender is limited to the email address associated with your Resend account; verify your own domain in Resend to send OTPs to other recipients. Save the environment variables and redeploy. Never commit API keys or put them in browser code.
 6. Wait for the deploy to become live, then open the generated `https://...onrender.com` URL.
 7. Run the seed command once against Atlas from a trusted local terminal:
 
@@ -102,4 +102,4 @@ The repository includes a `render.yaml` Blueprint configuration. Before deployin
    Atlas URI before testing doctor accounts; otherwise the deployed database
    will not contain the seeded doctor users.
 
-Render uses `/api/health` as the health check. Free services may sleep when idle, so the first request can take longer during a demo.
+Render uses `/api/health` as the health check. After configuring UPI, check this endpoint's `manualUpiConfigured` field; it should be `true`. After configuring Resend, check its `emailOtpConfigured` field; it should also be `true`. Free services may sleep when idle, so the first request can take longer during a demo.

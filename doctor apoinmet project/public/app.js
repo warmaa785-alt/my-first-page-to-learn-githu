@@ -323,7 +323,7 @@ async function loadAppointments() {
         for (const status of groups) {
             const rows = displayItems.filter((x) => x.status === status);
             if (!rows.length) continue;
-            html.push(`<h3>${status.replace("_", " ")}</h3>`);
+            html.push(`<h3>${status === "awaiting_payment" ? "Payment pending — token अभी जारी नहीं हुआ" : status.replace("_", " ")}</h3>`);
             for (const appointment of rows) {
                 const members = appointment.groupAppointments;
                 const paymentStatus = appointment.paymentStatus || "unknown";
@@ -335,12 +335,10 @@ async function loadAppointments() {
                     demo_paid: "पुराना demo payment"
                 }[paymentStatus] || paymentStatus;
                 const patientTokens = members.map((member) => {
-                    const token = Number.isInteger(member.tokenNumber)
-                        ? `Token ${escapeHtml(member.tokenId || member.tokenNumber)} · ${escapeHtml(member.appointmentTime || "")}`
-                        : paymentStatus === "failed"
-                            ? "token issue नहीं हुआ"
-                            : "payment approval के बाद token मिलेगा";
-                    return `${escapeHtml(member.patientName)} (उम्र ${escapeHtml(member.patientAge || "—")}): ${token}`;
+                    if (Number.isInteger(member.tokenNumber)) {
+                        return `${escapeHtml(member.patientName)} (उम्र ${escapeHtml(member.patientAge || "—")}): Token ${escapeHtml(member.tokenId || member.tokenNumber)} · ${escapeHtml(member.appointmentTime || "")}`;
+                    }
+                    return `${escapeHtml(member.patientName)} (उम्र ${escapeHtml(member.patientAge || "—")})`;
                 }).join("<br>");
                 const paymentForm = paymentStatus === "pending"
                     ? `<form class="payment-reference-form" data-appointment="${members[0]._id}">
@@ -356,13 +354,13 @@ async function loadAppointments() {
                     : "";
                 const paymentNote = appointment.status === "awaiting_payment"
                     ? `<p class="payment-note">${paymentStatus === "pending"
-                        ? "30 मिनट में payment करके reference भेजें। Admin verification के बाद ही token issue होगा।"
-                        : "Payment reference भेज दिया गया है। Admin verification के बाद सभी tokens issue होंगे।"}</p>`
+                        ? "UPI app में payment पूरा करें—सिर्फ app खोलने से payment नहीं होता। Payment successful होने के बाद UTR/reference भेजें। Admin transaction verify करेगा; उससे पहले कोई token जारी नहीं होगा। Booking 30 मिनट तक ही reserve रहेगी।"
+                        : "Payment reference भेज दिया गया है। Admin आपके UPI transaction को verify करेगा; verification से पहले कोई token जारी नहीं होगा।"}</p>`
                     : "";
                 const patientSummary = members.length > 1
-                    ? `<p><b>मरीज और tokens:</b><br>${patientTokens}</p>`
-                    : `<p><b>${patientTokens}</b></p>`;
-                html.push(`<article class="appointment"><strong>${appointment.paymentGroupId || appointment.appointmentId || "Appointment"} · ${members.length} मरीज</strong><p>${escapeHtml(appointment.doctor.name)} · ${escapeHtml(appointment.doctor.clinic)} · ${escapeHtml(appointment.visitDate)}</p>${patientSummary}<p>Payment: ₹${appointment.payment?.amount ?? appointment.paymentAmount ?? appointment.doctor.fee ?? 0} · ${paymentText}<br>Status: ${appointment.status === "awaiting_payment" ? "Payment verification pending" : appointment.status}</p>${paymentDetails}${paymentNote}${paymentForm}${members.length === 1 ? await trackingCard(appointment) : ""}</article>`);
+                    ? `<p><b>${status === "awaiting_payment" ? "Booking के मरीज (token अभी नहीं):" : "मरीज और tokens:"}</b><br>${patientTokens}</p>`
+                    : `<p><b>${status === "awaiting_payment" ? "Booking का मरीज (token अभी नहीं):" : patientTokens}</b>${status === "awaiting_payment" ? `<br>${patientTokens}` : ""}</p>`;
+                html.push(`<article class="appointment"><strong>${appointment.paymentGroupId || appointment.appointmentId || "Appointment"} · ${members.length} मरीज</strong><p>${escapeHtml(appointment.doctor.name)} · ${escapeHtml(appointment.doctor.clinic)} · ${escapeHtml(appointment.visitDate)}</p>${patientSummary}<p>Payment: ₹${appointment.payment?.amount ?? appointment.paymentAmount ?? appointment.doctor.fee ?? 0} · ${paymentText}<br>Status: ${appointment.status === "awaiting_payment" ? "Payment pending — token जारी नहीं" : appointment.status}</p>${paymentDetails}${paymentNote}${paymentForm}${members.length === 1 ? await trackingCard(appointment) : ""}</article>`);
             }
         }
         $("#appointments").innerHTML = html.join("") || "<p>अभी कोई appointment नहीं है।";
@@ -632,13 +630,13 @@ $("#doctor-details").addEventListener("submit", async (event) => {
         const paymentMarkup = data.payment.amount > 0
             ? `<p>UPI ID: <strong>${escapeHtml(data.payment.upiId)}</strong> · Amount: <strong>₹${data.payment.amount}</strong></p>
                 <a class="upi-pay-link" href="${escapeHtml(data.payment.upiUrl)}">UPI app खोलें</a>
-                <p>या QR scan करके payment करें:</p>
+                <p>अगर link से payment app में दिक्कत हो, QR scan करें या ऊपर दिखी UPI ID को अपने UPI app में manually डालें। App में payment successful होना जरूरी है; सिर्फ app खुलने पर पैसे नहीं कटते। अगर UPI app transaction को block करे, दूसरे UPI app से कोशिश करें; सभी apps में block हो तो receiver UPI ID/bank से जाँचें—यह app bank का block bypass नहीं कर सकता।</p>
                 <img class="upi-qr" src="${data.payment.qrDataUrl}" alt="UPI payment QR code">
                 <form class="payment-reference-form" data-appointment="${appointment._id}">
-                    <label>UPI transaction reference<input name="reference" maxlength="80" minlength="8" pattern="[A-Za-z0-9-]{8,80}" required placeholder="UPI app से transaction ID"></label>
+                    <label>Payment सफल होने के बाद UTR/reference डालें<input name="reference" maxlength="80" minlength="8" pattern="[A-Za-z0-9-]{8,80}" required placeholder="UPI app से transaction ID"></label>
                     <button type="submit">Payment reference भेजें</button>
                 </form>
-        <p class="payment-note">Payment का reference देने के बाद admin UPI transaction verify करेगा। Approval के बाद ही token issue होगा। 30 मिनट में reference न देने पर booking cancel हो जाएगी।</p>`
+        <p class="payment-note">यह direct UPI payment है; app अपने-आप payment verify नहीं कर सकता। पैसे आपके UPI app में सफलतापूर्वक कटने और admin द्वारा transaction verify होने के बाद ही token जारी होगा। 30 मिनट में payment reference न देने पर booking cancel हो जाएगी।</p>`
             : "<p>यह appointment free है; कोई payment जरूरी नहीं।</p>";
         $("#booking-message").textContent = data.message;
         $("#booking-confirmation").hidden = false;
@@ -648,7 +646,7 @@ $("#doctor-details").addEventListener("submit", async (event) => {
         $("#booking-confirmation").innerHTML = `<h3>${data.token ? "Appointment booked ✓" : "Payment verification pending"}</h3>
             <div class="booking-confirmation-grid">
                 <div><strong>Booking ID</strong><b>${escapeHtml(appointment.paymentGroupId || appointment.appointmentId)}</b></div>
-                <div><strong>Patients / tokens</strong><b>${patientTokens}</b></div>
+                <div><strong>${data.payment.amount > 0 ? "Patients (payment verify होने पर ही token मिलेगा)" : "Patients / tokens"}</strong><b>${patientTokens}</b></div>
                 <div><strong>Date</strong><b>${escapeHtml(appointment.visitDate)}</b></div>
                 <div><strong>Total payment (doctor fee + platform fee)</strong><b>₹${Number(data.payment.amount).toFixed(2)}</b></div>
                 <div><strong>Payment status</strong><b>${escapeHtml(appointment.paymentStatus)}</b></div>
